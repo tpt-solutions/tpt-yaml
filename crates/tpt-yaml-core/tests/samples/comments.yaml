@@ -1,0 +1,15 @@
+# comment before the document
+top: value # trailing comment on a scalar
+# comment between siblings
+list:
+  # comment before a sequence item
+  - a
+  - b # trailing comment on a sequence item
+  # comment after the last item, before dedent
+
+mapping:
+  # comment before a nested key
+  key: value
+  # comment at the end of a nested mapping
+
+# comment at the very end of the document

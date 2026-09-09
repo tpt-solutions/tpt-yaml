@@ -1,0 +1,7 @@
+inline_mapping: { a: 1, b: 2, nested: { c: 3 } }
+inline_sequence: [1, 2, 3, [4, 5]]
+mixed:
+  list: [a, b, { k: v }]
+  map: { x: [1, 2], y: 3 }
+empty_mapping: {}
+empty_sequence: []

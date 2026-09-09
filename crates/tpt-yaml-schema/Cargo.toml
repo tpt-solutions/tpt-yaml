@@ -1,0 +1,24 @@
+[package]
+name = "tpt-yaml-schema"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json = { version = "1.0", optional = true }
+tpt-yaml-core = { path = "../tpt-yaml-core", version = "0.1.0", default-features = false, features = ["alloc"] }
+tpt-yaml-serde = { path = "../tpt-yaml-serde", version = "0.1.0", optional = true, default-features = false }
+
+[features]
+default = ["std"]
+std = ["serde/std", "tpt-yaml-core/std", "tpt-yaml-serde/std"]
+alloc = ["serde/alloc", "tpt-yaml-core/alloc", "tpt-yaml-serde/alloc"]
+typed = ["dep:tpt-yaml-serde", "tpt-yaml-serde/std"]
+json-schema = ["dep:serde_json"]

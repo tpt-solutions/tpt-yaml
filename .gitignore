@@ -1,3 +1,6 @@
 /target
 **/*.rs.bk
 *.pdb
+
+# fetched locally per crates/tpt-yaml-core/tests/conformance/README.md
+crates/tpt-yaml-core/tests/conformance/yaml-test-suite/

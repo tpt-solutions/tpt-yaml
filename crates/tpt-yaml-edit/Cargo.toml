@@ -1,0 +1,21 @@
+[package]
+name = "tpt-yaml-edit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+tpt-yaml-core = { path = "../tpt-yaml-core", version = "0.1.0", default-features = false, features = ["alloc"] }
+tpt-yaml-serde = { path = "../tpt-yaml-serde", version = "0.1.0", optional = true, default-features = false }
+
+[features]
+default = ["std"]
+std = ["tpt-yaml-core/std", "tpt-yaml-serde/std"]
+alloc = ["tpt-yaml-core/alloc"]
+typed = ["dep:tpt-yaml-serde", "tpt-yaml-serde/std"]

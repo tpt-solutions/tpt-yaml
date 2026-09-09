@@ -1,0 +1,7 @@
+#![no_main]
+
+use libfuzzer_sys::fuzz_target;
+
+fuzz_target!(|data: &str| {
+    let _ = tpt_yaml_core::lexer::lex(data);
+});

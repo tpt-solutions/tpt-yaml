@@ -1,0 +1,21 @@
+[package]
+name = "tpt-yaml-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[[bin]]
+name = "tpt-yaml"
+path = "src/main.rs"
+
+[dependencies]
+serde_json = "1.0"
+tpt-yaml-core = { path = "../tpt-yaml-core", version = "0.1.0" }
+tpt-yaml-edit = { path = "../tpt-yaml-edit", version = "0.1.0" }
+tpt-yaml-schema = { path = "../tpt-yaml-schema", version = "0.1.0" }

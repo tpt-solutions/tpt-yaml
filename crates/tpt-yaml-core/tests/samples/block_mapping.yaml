@@ -1,0 +1,12 @@
+# a top-level comment
+name: tpt-yaml
+version: 1
+description: a dependency-light YAML toolkit
+nested:
+  a: 1
+  b: 2 # trailing comment
+  c:
+    deeper: true
+
+# blank line above, comment before a sibling key
+after: end

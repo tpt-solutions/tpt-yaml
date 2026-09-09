@@ -1,0 +1,7 @@
+   Compiling tpt-yaml-core v0.1.0 (C:\Programming\2 WIP\tpt-yaml\crates\tpt-yaml-core)
+   Compiling tpt-yaml-serde v0.1.0 (C:\Programming\2 WIP\tpt-yaml\crates\tpt-yaml-serde)
+   Compiling tpt-yaml-schema v0.1.0 (C:\Programming\2 WIP\tpt-yaml\crates\tpt-yaml-schema)
+   Compiling tpt-yaml-edit v0.1.0 (C:\Programming\2 WIP\tpt-yaml\crates\tpt-yaml-edit)
+   Compiling tpt-yaml-cli v0.1.0 (C:\Programming\2 WIP\tpt-yaml\crates\tpt-yaml-cli)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.81s
+DONE  

@@ -1,0 +1,16 @@
+plain_scalar: hello world
+single_quoted: 'it''s a test'
+double_quoted: "line1\nline2"
+literal_block: |
+  line one
+  line two
+folded_block: >
+  folded
+  text
+plain_number: 42
+plain_float: 3.14
+plain_bool: true
+plain_null: null
+tilde_null: ~
+quoted_number: "42"
+quoted_bool: "true"

@@ -1,0 +1,19 @@
+defaults: &defaults
+  adapter: postgres
+  timeout: 30
+
+development_extra: &development_extra
+  debug: true
+
+development:
+  <<: *defaults
+  database: dev_db
+
+production:
+  <<: *defaults
+  timeout: 60
+  database: prod_db
+
+combined:
+  <<: [*defaults, *development_extra]
+  extra: true

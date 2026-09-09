@@ -1,0 +1,16 @@
+plain_sequence:
+  - a
+  - b
+nested_sequence:
+  - - nested
+    - list
+compact_mapping_items:
+  - key: value
+    key2: value2
+aligned_sequence:
+- aligned
+- with
+- key
+nested_indent:
+  - indented
+  - items

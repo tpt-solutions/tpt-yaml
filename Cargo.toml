@@ -1,0 +1,23 @@
+[workspace]
+members = [
+    "crates/tpt-yaml-core",
+    "crates/tpt-yaml-serde",
+    "crates/tpt-yaml-edit",
+    "crates/tpt-yaml-schema",
+    "crates/tpt-yaml-cli",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+license = "MIT OR Apache-2.0"
+edition = "2021"
+rust-version = "1.75"
+repository = "https://github.com/tpt-solutions/tpt-yaml"
+authors = ["TPT Solutions"]
+description = "A dependency-light YAML toolkit"
+keywords = ["yaml", "parser", "serde", "editor", "schema"]
+categories = ["parser-implementations", "development-tools"]
+
+[workspace.dependencies]
+serde = { version = "1.0", features = ["derive"] }

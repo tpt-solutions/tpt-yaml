@@ -1,0 +1,25 @@
+[package]
+name = "tpt-yaml-serde-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+# Opts this crate out of the workspace at the repo root — cargo-fuzz targets need a nightly
+# toolchain and shouldn't affect `cargo build --workspace` on stable.
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.tpt-yaml-serde]
+path = ".."
+
+[[bin]]
+name = "deserialize"
+path = "fuzz_targets/deserialize.rs"
+test = false
+doc = false
+bench = false

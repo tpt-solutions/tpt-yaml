@@ -1,0 +1,9 @@
+default: &default_value 100
+override: *default_value
+list_anchor: &shared_list
+  - a
+  - b
+another_reference: *shared_list
+nested:
+  value: &nested_anchor nested value
+  reference: *nested_anchor

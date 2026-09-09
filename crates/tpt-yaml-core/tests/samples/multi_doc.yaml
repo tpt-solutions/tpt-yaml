@@ -1,0 +1,11 @@
+%YAML 1.2
+---
+doc: first
+values:
+  - 1
+  - 2
+---
+doc: second
+nested:
+  key: value
+...
