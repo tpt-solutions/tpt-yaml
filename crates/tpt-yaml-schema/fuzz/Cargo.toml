@@ -1,0 +1,30 @@
+[package]
+name = "tpt-yaml-schema-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+# Opts this crate out of the workspace at the repo root — cargo-fuzz targets need a nightly
+# toolchain and shouldn't affect `cargo build --workspace` on stable.
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.tpt-yaml-schema]
+path = ".."
+
+[dependencies.tpt-yaml-core]
+path = "../../tpt-yaml-core"
+default-features = false
+features = ["alloc"]
+
+[[bin]]
+name = "validate"
+path = "fuzz_targets/validate.rs"
+test = false
+doc = false
+bench = false

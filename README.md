@@ -11,7 +11,12 @@ standalone.
 | [`tpt-yaml-edit`](crates/tpt-yaml-edit) | stub | Lossless, span-preserving edits: change a value, re-render only the touched subtree |
 | [`tpt-yaml-schema`](crates/tpt-yaml-schema) | stub | JSON Schema (2020-12 subset) validation for parsed YAML documents |
 | [`tpt-yaml-cli`](crates/tpt-yaml-cli) | stub | `tpt-yaml` binary: `check`, `fmt`, `convert`, `diff` subcommands |
-| `tpt-yaml-ffi` | not yet scaffolded | C ABI + Python/JS bindings |
+| [`tpt-yaml-ffi`](crates/tpt-yaml-ffi) | in progress | C ABI foundation for language bindings |
+| [`tpt-yaml-wasm`](crates/tpt-yaml-wasm) | stub | `wasm-bindgen` bindings for the browser/Node.js |
+| [`tpt-yaml-python`](crates/tpt-yaml-python) | not yet implemented | Planned `pyo3` bindings (scaffold only) |
+
+Each crate has its own `README.md` (usage, design, known limitations) and `CHANGELOG.md`
+(unreleased so far — nothing has been published).
 
 ## Quick start
 

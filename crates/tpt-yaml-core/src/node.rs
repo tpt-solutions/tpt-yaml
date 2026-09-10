@@ -255,7 +255,10 @@ fn render_node(id: NodeId, document: &Document, indent: usize, output: &mut Stri
     }
 }
 
-fn is_nonempty_collection(node: &NodeData) -> bool {
+/// Whether `node` is a mapping or sequence with at least one entry/item. Exposed (not just
+/// `pub(crate)`) so `tpt-yaml-edit` can reuse the same block-vs-inline decision this
+/// pretty-printer makes, rather than duplicating it.
+pub fn is_nonempty_collection(node: &NodeData) -> bool {
     match &node.kind {
         NodeKind::Mapping(entries) => !entries.is_empty(),
         NodeKind::Sequence(items) => !items.is_empty(),
@@ -266,7 +269,9 @@ fn is_nonempty_collection(node: &NodeData) -> bool {
 /// Renders a node that isn't a non-empty collection: a scalar, an empty mapping/sequence (as
 /// flow `{}`/`[]`, since block style has no way to spell "empty"), or an alias (as `*name` —
 /// previously this case fell through to the literal text `null`, silently losing the alias).
-fn render_inline(node: &NodeData, document: &Document) -> String {
+/// Exposed so `tpt-yaml-edit` can render individual synthesized leaves without duplicating this
+/// logic (it mixes calls to this with byte-for-byte blitting of untouched spans).
+pub fn render_inline(node: &NodeData, document: &Document) -> String {
     match &node.kind {
         NodeKind::Scalar(scalar) => render_scalar(scalar),
         NodeKind::Mapping(_) => "{}".to_string(),

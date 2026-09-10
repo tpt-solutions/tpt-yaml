@@ -1,0 +1,25 @@
+[build-system]
+requires = ["maturin>=1.4,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "tpt-yaml"
+description = "Python bindings for the tpt-yaml YAML toolkit"
+requires-python = ">=3.8"
+license = { text = "MIT OR Apache-2.0" }
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+]
+dynamic = ["version"]
+
+[tool.maturin]
+bindings = "pyo3"
+# The Python package built by maturin is `tpt_yaml`, matching the `#[pymodule] fn tpt_yaml` in
+# `src/lib.rs` — Python import names can't contain hyphens, hence `tpt_yaml` here vs. the
+# hyphenated Cargo package name `tpt-yaml-python`.
+module-name = "tpt_yaml"
+# This is a "pure cdylib" layout (no separate `python/` source directory with hand-written .py
+# files) — everything callers see comes straight out of the compiled extension module.
+manifest-path = "Cargo.toml"
+features = ["pyo3/extension-module"]

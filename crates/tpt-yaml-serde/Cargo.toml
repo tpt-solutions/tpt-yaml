@@ -6,9 +6,9 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description.workspace = true
-keywords.workspace = true
-categories.workspace = true
+description = "Serde Deserializer/Serializer and a dynamic Value type for tpt-yaml-core YAML documents."
+keywords = ["yaml", "serde", "serialize", "deserialize"]
+categories = ["encoding", "parser-implementations"]
 
 [dependencies]
 serde.workspace = true

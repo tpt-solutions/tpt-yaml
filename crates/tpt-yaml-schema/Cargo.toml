@@ -6,9 +6,9 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description.workspace = true
-keywords.workspace = true
-categories.workspace = true
+description = "A JSON Schema (2020-12 subset) validator for tpt-yaml-core YAML documents."
+keywords = ["yaml", "json-schema", "validation", "schema"]
+categories = ["encoding", "development-tools"]
 
 [dependencies]
 serde.workspace = true
@@ -22,3 +22,6 @@ std = ["serde/std", "tpt-yaml-core/std", "tpt-yaml-serde/std"]
 alloc = ["serde/alloc", "tpt-yaml-core/alloc", "tpt-yaml-serde/alloc"]
 typed = ["dep:tpt-yaml-serde", "tpt-yaml-serde/std"]
 json-schema = ["dep:serde_json"]
+
+[dev-dependencies]
+proptest = "1"

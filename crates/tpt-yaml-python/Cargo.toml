@@ -1,0 +1,41 @@
+[package]
+name = "tpt-yaml-python"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Python bindings (pyo3) for the tpt-yaml YAML toolkit."
+keywords = ["yaml", "python", "pyo3", "bindings"]
+categories = ["api-bindings", "external-ffi-bindings"]
+
+[lib]
+# `cdylib` for `maturin`/Python to load as an extension module; `rlib` kept too so `cargo test`
+# can run this crate's own Rust unit tests without going through the Python-extension build path
+# (pyo3's `auto-initialize` feature lets `Python::with_gil` boot an embedded interpreter for
+# plain `cargo test`).
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# `tpt-yaml-python` is intentionally std-only, same exception class as `tpt-yaml-cli`/
+# `tpt-yaml-ffi` (see `AGENTS.md`): a Python bindings layer has no reason to run in `no_std`
+# environments.
+tpt-yaml-core = { path = "../tpt-yaml-core", version = "0.1.0" }
+tpt-yaml-serde = { path = "../tpt-yaml-serde", version = "0.1.0" }
+# Deliberately *not* enabling `pyo3`'s `extension-module` feature here (unlike most pyo3 crate
+# examples): that feature skips linking against libpython, which is correct for the actual
+# extension module `maturin build`/`maturin develop` produce (`pyproject.toml`'s
+# `[tool.maturin] features = ["pyo3/extension-module"]` passes it in for that build) but is
+# incompatible with plain `cargo build`/`cargo test`, which need to link against libpython to run
+# this crate's own Rust code/tests directly. Passing `pyo3/extension-module` as a *direct* cargo
+# feature flag (`cargo build -p tpt-yaml-python --features pyo3/extension-module`, which is what
+# `maturin` does under the hood) works without this crate needing to re-expose it as a feature of
+# its own, and — importantly — without it being swept in by `--all-features`, which would collide
+# with the `auto-initialize` dev-dependency below in the same `cargo test --all-features` build.
+pyo3 = { version = "0.24" }
+
+[dev-dependencies]
+# `auto-initialize` lets `Python::with_gil` boot an embedded interpreter for plain `cargo test`
+# runs (no `maturin`/extension-module build needed).
+pyo3 = { version = "0.24", features = ["auto-initialize"] }

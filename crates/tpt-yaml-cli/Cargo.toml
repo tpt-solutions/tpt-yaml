@@ -6,9 +6,9 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description.workspace = true
-keywords.workspace = true
-categories.workspace = true
+description = "A command-line tool for parsing, formatting, validating, converting, and diffing YAML files."
+keywords = ["yaml", "cli", "formatter", "linter", "diff"]
+categories = ["command-line-utilities"]
 
 [[bin]]
 name = "tpt-yaml"
@@ -19,3 +19,4 @@ serde_json = "1.0"
 tpt-yaml-core = { path = "../tpt-yaml-core", version = "0.1.0" }
 tpt-yaml-edit = { path = "../tpt-yaml-edit", version = "0.1.0" }
 tpt-yaml-schema = { path = "../tpt-yaml-schema", version = "0.1.0" }
+tpt-yaml-serde = { path = "../tpt-yaml-serde", version = "0.1.0" }

@@ -5,6 +5,9 @@ members = [
     "crates/tpt-yaml-edit",
     "crates/tpt-yaml-schema",
     "crates/tpt-yaml-cli",
+    "crates/tpt-yaml-ffi",
+    "crates/tpt-yaml-wasm",
+    "crates/tpt-yaml-python",
 ]
 resolver = "2"
 

@@ -1,0 +1,25 @@
+﻿[package]
+name = "tpt-yaml-edit-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+# Opts this crate out of the workspace at the repo root — cargo-fuzz targets need a nightly
+# toolchain and shouldn't affect `cargo build --workspace` on stable.
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.tpt-yaml-edit]
+path = ".."
+
+[[bin]]
+name = "roundtrip_edit"
+path = "fuzz_targets/roundtrip_edit.rs"
+test = false
+doc = false
+bench = false

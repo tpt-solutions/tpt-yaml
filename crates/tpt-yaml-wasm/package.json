@@ -1,0 +1,11 @@
+{
+  "name": "tpt-yaml-wasm",
+  "version": "0.1.0",
+  "description": "WASM bindings for the tpt-yaml toolkit: parse YAML to/from native JS values in the browser or Node.js",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tpt-solutions/tpt-yaml"
+  },
+  "keywords": ["yaml", "wasm", "parser"]
+}

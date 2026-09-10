@@ -6,9 +6,9 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description.workspace = true
-keywords.workspace = true
-categories.workspace = true
+description = "Lexer, parser, and arena-based node model for YAML 1.1/1.2, with zero external dependencies and no_std + alloc support."
+keywords = ["yaml", "parser", "lexer", "no-std"]
+categories = ["parser-implementations", "no-std", "encoding"]
 
 [features]
 default = ["std"]
