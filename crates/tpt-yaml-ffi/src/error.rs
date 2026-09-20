@@ -46,8 +46,8 @@ thread_local! {
 pub(crate) fn set_last_error(message: impl Into<Vec<u8>>) {
     // A `CString::new` failure means `message` contained an interior NUL byte; fall back to a
     // fixed message rather than silently dropping the error entirely.
-    let message =
-        CString::new(message).unwrap_or_else(|_| CString::new("<error message contained NUL>").expect("no NUL"));
+    let message = CString::new(message)
+        .unwrap_or_else(|_| CString::new("<error message contained NUL>").expect("no NUL"));
     LAST_ERROR.with(|slot| *slot.borrow_mut() = Some(message));
 }
 
@@ -79,7 +79,10 @@ pub extern "C" fn tpt_yaml_last_error_message() -> *const c_char {
 /// rather than letting it unwind across the FFI boundary (which is undefined behavior). `on_err`
 /// builds the sentinel return value for the panic case (e.g. `null`, `-1`, or
 /// `TptYamlErrorCode::PanicCaught` itself).
-pub(crate) fn guard<R>(on_err: impl FnOnce() -> R, f: impl FnOnce() -> R + std::panic::UnwindSafe) -> R {
+pub(crate) fn guard<R>(
+    on_err: impl FnOnce() -> R,
+    f: impl FnOnce() -> R + std::panic::UnwindSafe,
+) -> R {
     match std::panic::catch_unwind(f) {
         Ok(value) => value,
         Err(payload) => {

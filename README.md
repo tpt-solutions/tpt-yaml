@@ -6,17 +6,18 @@ standalone.
 
 | Crate | Status | Description |
 | --- | --- | --- |
-| [`tpt-yaml-core`](crates/tpt-yaml-core) | in progress | Lexer, parser, arena-based node model, `no_std` + `alloc` + `std`, zero external dependencies |
-| [`tpt-yaml-serde`](crates/tpt-yaml-serde) | stub | `serde` `Deserializer`/`Serializer` over `tpt-yaml-core`'s arena, plus a dynamic `Value` type |
-| [`tpt-yaml-edit`](crates/tpt-yaml-edit) | stub | Lossless, span-preserving edits: change a value, re-render only the touched subtree |
-| [`tpt-yaml-schema`](crates/tpt-yaml-schema) | stub | JSON Schema (2020-12 subset) validation for parsed YAML documents |
-| [`tpt-yaml-cli`](crates/tpt-yaml-cli) | stub | `tpt-yaml` binary: `check`, `fmt`, `convert`, `diff` subcommands |
-| [`tpt-yaml-ffi`](crates/tpt-yaml-ffi) | in progress | C ABI foundation for language bindings |
-| [`tpt-yaml-wasm`](crates/tpt-yaml-wasm) | stub | `wasm-bindgen` bindings for the browser/Node.js |
-| [`tpt-yaml-python`](crates/tpt-yaml-python) | not yet implemented | Planned `pyo3` bindings (scaffold only) |
+| [`tpt-yaml-core`](crates/tpt-yaml-core) | implemented, unreleased | Lexer, parser, arena-based node model, event-driven streaming parser, `no_std` + `alloc` + `std`, zero external dependencies |
+| [`tpt-yaml-serde`](crates/tpt-yaml-serde) | implemented, unreleased | `serde` `Deserializer`/`Serializer` over `tpt-yaml-core`'s arena, a dynamic `Value` type, and a constant-memory streaming `Deserializer` |
+| [`tpt-yaml-edit`](crates/tpt-yaml-edit) | implemented, unreleased | Lossless, span-preserving edits: change a value, re-render only the touched subtree |
+| [`tpt-yaml-schema`](crates/tpt-yaml-schema) | implemented, unreleased | JSON Schema (2020-12 subset) validation for parsed YAML documents |
+| [`tpt-yaml-cli`](crates/tpt-yaml-cli) | implemented, unreleased | `tpt-yaml` binary: `check`, `fmt`, `convert`, `diff` subcommands |
+| [`tpt-yaml-ffi`](crates/tpt-yaml-ffi) | implemented, unreleased | C ABI foundation for language bindings |
+| [`tpt-yaml-python`](crates/tpt-yaml-python) | implemented, unreleased | `pyo3` bindings: `loads`/`dumps`/`TptYamlError`, verified with `maturin develop` |
+| [`tpt-yaml-wasm`](crates/tpt-yaml-wasm) | implemented, unreleased | `wasm-bindgen` bindings for the browser/Node.js: `parse`/`toJson`/`stringify` |
 
-Each crate has its own `README.md` (usage, design, known limitations) and `CHANGELOG.md`
-(unreleased so far — nothing has been published).
+Each crate has its own `README.md` (usage, design, known limitations) and `CHANGELOG.md`.
+None have been published to crates.io/PyPI/npm yet — see [todo.md](todo.md) §7 for
+release-readiness status and publish order.
 
 ## Quick start
 

@@ -9,6 +9,8 @@ extern crate alloc;
 pub mod de;
 pub mod error;
 pub mod ser;
+#[cfg(feature = "streaming")]
+pub mod stream;
 pub mod value;
 
 pub use de::Deserializer;

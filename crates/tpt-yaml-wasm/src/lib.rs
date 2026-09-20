@@ -54,7 +54,8 @@ pub fn to_json(source: &str) -> Result<String, JsValue> {
 /// `tpt_yaml_serde::to_string` uses for any `T: Serialize`.
 #[wasm_bindgen]
 pub fn stringify(value: JsValue) -> Result<String, JsValue> {
-    let value: Value = serde_wasm_bindgen::from_value(value).map_err(|err| js_error(&err.to_string()))?;
+    let value: Value =
+        serde_wasm_bindgen::from_value(value).map_err(|err| js_error(&err.to_string()))?;
     tpt_yaml_serde::to_string(&value).map_err(|err| js_error(&err.to_string()))
 }
 

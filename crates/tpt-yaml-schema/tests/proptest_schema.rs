@@ -24,10 +24,25 @@ enum SchemaSpec {
     Empty,
     Null,
     Boolean,
-    String { min_length: Option<u8>, max_length: Option<u8>, pattern: Option<&'static str> },
-    Number { minimum: Option<i32>, maximum: Option<i32> },
-    Array { items: Option<Box<SchemaSpec>>, min_items: Option<u8>, max_items: Option<u8> },
-    Object { properties: Vec<(String, SchemaSpec)>, required: Vec<String>, forbid_additional: bool },
+    String {
+        min_length: Option<u8>,
+        max_length: Option<u8>,
+        pattern: Option<&'static str>,
+    },
+    Number {
+        minimum: Option<i32>,
+        maximum: Option<i32>,
+    },
+    Array {
+        items: Option<Box<SchemaSpec>>,
+        min_items: Option<u8>,
+        max_items: Option<u8>,
+    },
+    Object {
+        properties: Vec<(String, SchemaSpec)>,
+        required: Vec<String>,
+        forbid_additional: bool,
+    },
     Enum(Vec<EnumLiteral>),
     Const(EnumLiteral),
     Not(Box<SchemaSpec>),
@@ -76,11 +91,7 @@ fn schema_spec() -> impl Strategy<Value = SchemaSpec> {
         (
             proptest::option::of(0u8..8),
             proptest::option::of(0u8..8),
-            proptest::option::of(prop_oneof![
-                Just("^[a-z]+$"),
-                Just("[0-9]+"),
-                Just(".*"),
-            ]),
+            proptest::option::of(prop_oneof![Just("^[a-z]+$"), Just("[0-9]+"), Just(".*"),]),
         )
             .prop_map(|(min_length, max_length, pattern)| SchemaSpec::String {
                 min_length,
@@ -110,10 +121,8 @@ fn schema_spec() -> impl Strategy<Value = SchemaSpec> {
                 prop::collection::vec(ident(), 0..2),
                 any::<bool>(),
             )
-                .prop_map(|(properties, required, forbid_additional)| SchemaSpec::Object {
-                    properties,
-                    required,
-                    forbid_additional,
+                .prop_map(|(properties, required, forbid_additional)| {
+                    SchemaSpec::Object { properties, required, forbid_additional }
                 }),
             inner.clone().prop_map(|s| SchemaSpec::Not(Box::new(s))),
             prop::collection::vec(inner.clone(), 1..3).prop_map(SchemaSpec::OneOf),

@@ -95,6 +95,74 @@ has actually been fuzz-run in this environment; and §7's release-readiness
 items (tag `v0.1.0`, real `cargo publish` in dependency order, docs.rs
 verification, CI job for the FFI header) are still outstanding.
 
+**Update (2026-09-20):** implemented `tpt-yaml-serde`'s `streaming` feature
+(§2/§8), previously a documented no-op. `tpt-yaml-core` gained a new
+`stream::EventParser` (§1) — a pull-based, source-driven parser reading
+tokens lazily from a refactored line-buffered `Lexer::next_token` (the lexer
+was previously eager, materializing its whole token `Vec` up front) — plus
+`tpt-yaml-serde::stream::{Deserializer, Documents}` built on it. Both sides
+have real test coverage, including proptests cross-checking the new
+event-driven path against the existing, well-tested arena-based path
+(`tpt-yaml-core/tests/proptest_stream.rs`,
+`tpt-yaml-serde/tests/proptest_streaming.rs`); `cargo test --workspace
+--all-features` and `cargo clippy --workspace --all-features` are both
+clean. Scope was deliberately cut in one place: anchors/aliases are rejected
+by the streaming path rather than supported, since replaying an alias
+requires buffering the anchored subtree's events, which would silently
+reintroduce the O(document size) memory use streaming exists to avoid —
+documents with anchors should keep using `tpt_yaml_serde::from_str`. Other
+§8 items (`--strict-version`, conformance corpus, fuzz runs, benches,
+examples, `CONTRIBUTING.md`, etc.) are still outstanding.
+
+**Update (2026-09-20, continued):** wired up the FFI header CI job and, while
+doing so, found that the *existing* `msrv`/`clippy` CI jobs would not
+actually have passed if run for real, despite the earlier "sanity-checked
+locally" status:
+- `cargo clippy -D warnings` failed on two pre-existing issues, now fixed:
+  `tpt-yaml-edit/src/path.rs`'s `ok_or_else` → `ok_or` (pure lint, no
+  behavior change) and `tpt-yaml-schema/src/pattern.rs`'s `Pattern::is_match`
+  had a dead `let start = if self.anchored_start { 0 } else { 0 }` (both
+  branches were `0`) left over from a refactor — the actual anchored/
+  unanchored logic lives in the code right below it and was already correct,
+  so this was inert cruft, not a live bug; removed it.
+- `cargo build --workspace` under a real 1.75 toolchain failed outright:
+  `tempfile` (pulled in as a transitive dependency by both `cbindgen`, a
+  `tpt-yaml-ffi` build-dependency, and `proptest`'s `rusty-fork`) and
+  `proptest` itself had both drifted to versions requiring a newer
+  toolchain/Cargo (`edition2024` manifests, rustc 1.82+) than this
+  workspace's declared 1.75 MSRV — the workspace `Cargo.lock` had simply
+  never been resolved under anything but a modern stable toolchain before.
+  Fixed by pinning `tempfile` in `Cargo.lock` (via `cargo update -p tempfile
+  --precise 3.14.0`) and capping every crate's `proptest` dev-dependency to
+  `>=1, <1.9` (1.8 is the newest release still supporting 1.75) so a future
+  bare `cargo update` doesn't silently reintroduce the break.
+- Separately, `tpt-yaml-ffi`'s `cbindgen` build-dependency was *itself*
+  unconditionally past-MSRV (0.29's own `toml`/`indexmap`/`hashbrown` chain
+  needs `edition2024`), independent of the tempfile pin above. Since
+  `cbindgen` is a dev-time header-generation tool, not part of the crate's
+  public API, it's now gated behind a new `generate-header` feature (on by
+  default, so normal `cargo build` still regenerates the header exactly as
+  before); the `msrv` CI job builds `tpt-yaml-ffi` with
+  `--no-default-features` instead of as part of a blanket
+  `--workspace` build.
+- The `msrv` job itself now builds/tests the six crates AGENTS.md's MSRV
+  promise actually covers (`core`/`serde`/`edit`/`schema`/`cli`/`ffi`), not
+  `--workspace` — `tpt-yaml-python`/`tpt-yaml-wasm` are bindings crates
+  layered on top with their own much newer toolchain requirements
+  (`pyo3`/`wasm-bindgen`) that were never part of the MSRV commitment.
+- Added the `ffi-header` job itself: `cargo build -p tpt-yaml-ffi` (default
+  features, so `cbindgen` runs) then `git diff --exit-code` on
+  `include/tpt_yaml.h`, closing the §1/§8 "no CI job regenerating/diffing
+  the header" gap.
+
+All of the above was verified locally end-to-end: `cargo fmt --all -- --check`,
+`cargo clippy --workspace --all-targets [--all-features] -- -D warnings`,
+`cargo test --workspace [--all-features]`, and (via `rustup run 1.75.0`) both
+scoped MSRV build/test commands the `msrv` job now runs, all green. Real
+GitHub Actions execution is still unverified (no push done from this
+session) — that's the one piece of the "not yet run in real CI" status this
+update doesn't close.
+
 ---
 
 ## 0. Workspace-level
@@ -105,7 +173,7 @@ verification, CI job for the FFI header) are still outstanding.
 - [x] Root `README.md` (family overview, crate table, quick-start example)
 - [x] `.gitignore` (`/target`, `*.rs.bk`/`*.pdb`, plus the gitignored `tests/conformance/yaml-test-suite/` corpus dir)
 - [x] `git init` + first commit (workspace `Cargo.toml`/`Cargo.lock`/`crates/` still untracked — need a follow-up commit)
-- [x] `.github/workflows/ci.yml` — fmt/clippy(default+all-features)/test(default+all-features)/msrv(1.75) jobs; no `windows-com`-equivalent job; **not yet run in real CI**, only sanity-checked by running the equivalent commands locally
+- [x] `.github/workflows/ci.yml` — fmt/clippy(default+all-features)/test(default+all-features)/msrv(1.75)/ffi-header jobs; no `windows-com`-equivalent job; the local sanity-check (running every job's commands by hand, including the `msrv` job under a real 1.75 toolchain via `rustup run 1.75.0`) now genuinely passes — see the 2026-09-20 status-snapshot update above for the real MSRV/clippy breakage it found and fixed along the way. **Still not yet run as real GitHub Actions**
 - [x] `rustfmt.toml` (`edition = "2021"`, `max_width = 100`, `use_small_heuristics = "Max"`) / `clippy.toml` (`msrv = "1.75"`) — whole workspace reformatted to match (it wasn't rustfmt-clean before)
 - [x] `AGENTS.md` documenting publish order, feature-split policy, `tpt-yaml-cli` is-std-only exception, no-`tpt-io-*`-dependency rule
 - [x] Decide & document MSRV policy — `rust-version = "1.75"` set in workspace `Cargo.toml`, narrated in `AGENTS.md`
@@ -113,7 +181,8 @@ verification, CI job for the FFI header) are still outstanding.
 ## 1. `tpt-yaml-core` (foundation — do this first, sets the pattern for all others)
 
 - [x] `Cargo.toml`: metadata, `no_std` + `alloc` + `std` (default) features, **zero external dependencies**
-- [x] `src/lib.rs` module layout: `lexer`, `parser`, `event`, `node`, `span`, `version`, `resolve`, `diagnostics`
+- [x] `src/lib.rs` module layout: `lexer`, `parser`, `event`, `node`, `span`, `version`, `resolve`, `diagnostics`, `stream`
+- [x] `stream::EventParser`: a pull-based, source-driven event parser (`src/stream.rs`) alongside the existing arena `parser`/replay-only `event` modules — reads tokens lazily from a new `Lexer::next_token` (the lexer itself was refactored from an eager `lex(self) -> Vec<Token>` into a line-buffered pull cursor so it never materializes the whole token stream either) and emits self-contained `Event`s without building a `Document`, so memory use is O(nesting depth) rather than O(node count). This is what `tpt-yaml-serde`'s `streaming` feature (§2) is built on. Differs from the arena parser in two documented ways: merge keys (`<<`) are rejected rather than expanded (expansion needs the anchored mapping held in memory), and a collection's span covers only its opening token rather than its full byte extent. Covered by unit tests (flat/nested/flow mappings, anchors/aliases, merge-key rejection with and without `ParserOptions.merge_keys`, multi-doc streams, empty input, resumability, `finish()`) plus a proptest cross-checking its output against the arena parser over generated YAML and a panic-freedom proptest over arbitrary bytes
 - [x] Local `YamlError`/`ErrorContext`/`ErrorKind`/`ParseError`-equivalent types: byte offset, captured byte-window context — modeled on but independent of `tpt-io-core`'s shape
 - [x] Lexer: indentation/tab-detection, block/flow scalar indicators, plain/single/double-quoted scalars, directives drafted (389 lines) — compiles and tests pass; directive lexing fixed to capture full directive text (was truncating to just the keyword), `!!`-style secondary tag handles now lex correctly
 - [x] Parser: column/indentation-aware arena-building recursive-descent parser (`crates/tpt-yaml-core/src/parser.rs`) — implicit `key: value` block mappings (previously entirely unhandled — only explicit `?`-key mappings worked), block sequences, flow mappings/sequences, the "sequence value may align with its mapping key" exception, nested structures via token-column comparison
@@ -143,7 +212,7 @@ verification, CI job for the FFI header) are still outstanding.
 - [x] `Serializer` building fresh output via `tpt-yaml-core`'s shared printer — `src/ser.rs`: full `serde::Serializer` impl building a `Document` directly via `NodeData::add_node` (no separate `NodeBuilder` type exists in `tpt-yaml-core`, so this composes the arena API directly); unit enum variants → plain string, newtype/tuple/struct variants → single-entry mapping (matches `serde_yaml`/`serde_json` convention)
 - [x] `Value` dynamic type (`Null/Bool/Int/Float/String/Sequence/Mapping/Tagged`) — `src/value.rs`; `Value::from_node(&Document, NodeId)` is the direct arena-conversion boundary, plus a hand-written `Serialize`/`Deserialize` (self-describing visitor) so `Value` also works as `T` in `from_str`/`to_string`
 - [x] `from_str` / `from_slice` / `to_string` / `to_writer` (std) — `to_writer` is `std`-gated (needs `std::io::Write`); the others work under `alloc` alone
-- [ ] `streaming` feature: `Deserializer::from_events` for constant-memory decode of large documents — **not implemented**; the feature flag exists in `Cargo.toml` but is a no-op. `tpt_yaml_core::event::events()` only replays an already-fully-parsed `Document`, so real constant-memory streaming would need event-driven parsing straight from source, which doesn't exist yet
+- [x] `streaming` feature: `Deserializer::from_events` for constant-memory decode of large documents — implemented on top of a new `tpt_yaml_core::stream::EventParser` (`crates/tpt-yaml-core/src/stream.rs`), a pull-based, source-driven parser that emits self-contained `Event`s without ever building a `Document` (memory use is O(nesting depth), not O(node count)); `tpt-yaml-serde/src/stream.rs` wraps it in a `serde::Deserializer` plus a `Documents<T>` iterator over `---`-separated streams. Known, documented scope cuts: no zero-copy (every scalar is already an owned `String` by the time it reaches the deserializer), and anchors/aliases are rejected (replaying an alias needs the anchored subtree's events buffered in memory, which would reintroduce the O(document size) cost this module exists to avoid) — same class of restriction as the pre-existing merge-key rejection. Covered by: `tpt-yaml-core`'s own unit tests + a proptest cross-checking `EventParser`'s output against the arena parser over generated YAML (`tests/proptest_stream.rs`), and `tpt-yaml-serde`'s unit tests + a proptest cross-checking the streaming `Deserializer` against the arena one over an arbitrary `Value` (`tests/proptest_streaming.rs`)
 - [x] Round-trip proptest: `from_str(to_string(v)?)? == v` over an arbitrary `Value` strategy — `tests/roundtrip.rs`; finding and fixing its first failure (`Value::Sequence(vec![])` round-tripping to `Value::Null`) is what surfaced the empty-collection pretty-printer bug fixed above. Floats are restricted to a finite range (see README's "known limitations": `NaN`/`inf` don't round-trip since `tpt-yaml-core` doesn't special-case them)
 - [x] Fuzz target: `deserialize` (arbitrary bytes → `from_slice::<Value>`, no panics) — scaffolded under `fuzz/` like `tpt-yaml-core`'s; typechecks on `cargo +nightly check` but not actually fuzz-run (`cargo-fuzz` not installed in this environment)
 - [x] README + docs, `cargo publish --dry-run` — README written; `cargo publish --dry-run -p tpt-yaml-serde` correctly fails right now because `tpt-yaml-core` isn't on crates.io yet (not a manifest error — that was fixed by the `version =` addition above — this is the real, expected dependency-ordering block described in §7)
@@ -212,6 +281,95 @@ Publish order (respects dependency graph):
 - [ ] Tag `v0.1.0` release once all crates are publish-ready
 - [ ] Actual `cargo publish` run per crate in dependency order (manual, not automated)
 - [ ] Post-publish: verify docs.rs builds succeed for every crate (including feature-gated docs)
+
+## 8. Platform review follow-ups (2026-09-20)
+
+From a codebase-wide review for bugs/gaps, adoption friction, and innovation
+opportunities. Not yet started unless marked otherwise.
+
+### Correctness / inert-feature cleanup
+
+- [x] Reconcile root `README.md`'s per-crate status table (currently says
+      "stub"/"in progress" for several crates) with the actual fully-implemented
+      state described in this file's status snapshot — currently contradictory
+      and will confuse anyone landing on the repo — done: every crate now reads
+      "implemented, unreleased" (all are fully implemented per this file; none
+      are on crates.io/PyPI/npm yet), and `tpt-yaml-python`'s row was fixed from
+      "not yet implemented (scaffold only)" to reflect that it's real and
+      `maturin develop`-verified
+- [x] Implement `tpt-yaml-serde`'s `streaming` feature (`Deserializer::from_events`
+      constant-memory decode) or remove the feature flag until it's real — done,
+      see §2/§1 for the `EventParser`/`stream::Deserializer` implementation and
+      its test coverage
+- [ ] Implement `ParserOptions.strict_version` / CLI `--strict-version` YAML
+      1.1-vs-1.2 ambiguity detection, or remove the flag — currently wired
+      end-to-end but inert (§1/§5 gap, restated here as an actionable item)
+- [ ] Actually fetch and run the `yaml-test-suite` conformance corpus against
+      `tpt-yaml-core`'s harness at least once, and fix whatever it finds —
+      never run against the real corpus so far, only smoke-tested locally
+- [ ] Run all scaffolded fuzz targets (core lexer/parser, serde deserialize,
+      edit roundtrip, schema validate, ffi boundary) for real, not just
+      typecheck them — install `cargo-fuzz` and let each run long enough to
+      build a corpus before calling any of them "fuzzed"
+- [x] Add a CI job that regenerates `tpt-yaml-ffi/include/tpt_yaml.h` via
+      `cbindgen` and diffs it against the checked-in copy, failing on drift —
+      `.github/workflows/ci.yml`'s new `ffi-header` job runs `cargo build -p
+      tpt-yaml-ffi` (which drives the crate's existing `build.rs`/`cbindgen`
+      regeneration) then `git diff --exit-code` on the header
+
+### Missing capabilities
+
+- [ ] Add `benches/` with `criterion` benchmarks for `tpt-yaml-core` parse and
+      `tpt-yaml-serde` round-trip, including head-to-head numbers vs
+      `serde_yaml`/`yaml-rust` — currently zero benchmarks exist anywhere in
+      the workspace, which weakens both the correctness story and the adoption
+      pitch
+- [ ] Fix `tpt-yaml-edit`'s known comment-preservation gap: comments attached
+      directly to a dirty container aren't preserved because core's trivia
+      model is per-container, not per-entry (documented in
+      `tpt-yaml-edit/README.md:40-45`) — risks undermining the "lossless
+      editor" pitch for early adopters
+- [ ] `tpt-yaml-schema`: add external `$ref` support (currently internal-only)
+      and `format` validators (email/date-time/uri/etc.) — real-world JSON
+      Schema usage leans heavily on both
+
+### Adoption / usability
+
+- [ ] Add an `examples/` directory to every crate with at least one runnable
+      example: `tpt-yaml-core/examples/parse_basic.rs`,
+      `tpt-yaml-edit/examples/round_trip_edit.rs` (edit a value, show comments
+      survive), `tpt-yaml-schema/examples/validate_config.rs`,
+      `tpt-yaml-serde/examples/derive_struct.rs`, plus one each for
+      `tpt-yaml-python` and `tpt-yaml-wasm` — currently none exist anywhere,
+      which is the single highest-friction gap for new users
+- [ ] Add root-level `CONTRIBUTING.md` (build instructions, MSRV, how to run
+      the conformance suite/fuzzers, PR checklist) — none exists anywhere in
+      the repo today
+- [ ] Add a root `CHANGELOG.md` aggregating/pointing at per-crate changelogs —
+      currently only per-crate `CHANGELOG.md`s exist
+- [ ] Get `.github/workflows/ci.yml` actually running (green) on GitHub, not
+      just sanity-checked locally, before the `v0.1.0` publish push — the
+      *local* sanity-check now genuinely passes end-to-end (see below); it
+      hasn't run as real GitHub Actions yet, which is the only remaining gap
+      here
+- [ ] Write a "migrating from `serde_yaml`" guide/example — `serde_yaml` is
+      deprecated upstream, so there's a live, active audience looking for a
+      replacement right now; a concrete side-by-side API migration doc is a
+      strong, timely adoption lever
+- [ ] Consider a `templates/`/`cargo generate`-style set of common YAML shapes
+      (k8s manifest, docker-compose, CI config, OpenAPI) to demo
+      parse+schema+edit together end-to-end, rather than leaving it to docs
+      alone
+
+### Innovation / differentiation (exploratory, not committed)
+
+- [ ] Explore a minimal YAML language-server example built on
+      `tpt-yaml-schema` + `tpt-yaml-edit`'s span info (validation + hover) —
+      most of the needed pieces already exist, would be a strong
+      differentiator vs. plain parser crates
+- [ ] Explore a static WASM playground page (parse/validate/edit YAML in
+      browser) built on the existing `tpt-yaml-wasm` bindings — cheap given
+      what's already implemented, doubles as a live README demo
 
 ## Deferred / explicitly out of scope
 

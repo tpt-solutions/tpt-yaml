@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [master]
   pull_request:
 
 env:
@@ -61,5 +61,28 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.75"
-      - run: cargo build --workspace
-      - run: cargo test --workspace
+      # Scoped to the six crates the MSRV promise in AGENTS.md actually covers (the
+      # `tpt-yaml-*` publish-order list), not the whole workspace: `tpt-yaml-python`/
+      # `tpt-yaml-wasm` are bindings crates on top of that (pyo3/wasm-bindgen's own MSRVs are
+      # well past 1.75 and out of this workspace's control), and `tpt-yaml-ffi` is built with
+      # `--no-default-features` to skip its optional `cbindgen` build-dependency, whose own
+      # dependency chain has also drifted past 1.75 (see `tpt-yaml-ffi/Cargo.toml`).
+      - run: >
+          cargo build -p tpt-yaml-core -p tpt-yaml-serde -p tpt-yaml-edit -p tpt-yaml-schema
+          -p tpt-yaml-cli
+      - run: cargo build -p tpt-yaml-ffi --no-default-features
+      - run: >
+          cargo test -p tpt-yaml-core -p tpt-yaml-serde -p tpt-yaml-edit -p tpt-yaml-schema
+          -p tpt-yaml-cli
+      - run: cargo test -p tpt-yaml-ffi --no-default-features
+
+  ffi-header:
+    name: ffi header up to date
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: regenerate include/tpt_yaml.h
+        run: cargo build -p tpt-yaml-ffi
+      - name: fail if cbindgen output drifted from the checked-in header
+        run: git diff --exit-code -- crates/tpt-yaml-ffi/include/tpt_yaml.h

@@ -116,7 +116,12 @@ impl EditableDocument {
         Ok(())
     }
 
-    fn splice_child(&mut self, parent_id: NodeId, key: &Key, new_child: NodeId) -> Result<(), Error> {
+    fn splice_child(
+        &mut self,
+        parent_id: NodeId,
+        key: &Key,
+        new_child: NodeId,
+    ) -> Result<(), Error> {
         match key {
             Key::Field(name) => match child_index(&self.document, parent_id, key)? {
                 Some(index) => {
@@ -142,7 +147,8 @@ impl EditableDocument {
                 }
             },
             Key::Index(_) => {
-                let index = child_index(&self.document, parent_id, key)?.ok_or(Error::IndexOutOfBounds)?;
+                let index =
+                    child_index(&self.document, parent_id, key)?.ok_or(Error::IndexOutOfBounds)?;
                 let node = self.document.node_mut(parent_id).ok_or(Error::DanglingNode)?;
                 match &mut node.kind {
                     NodeKind::Sequence(items) => {
@@ -402,7 +408,8 @@ mod tests {
     #[test]
     fn set_replaces_the_whole_document() {
         let mut doc = EditableDocument::parse("a: 1\n").unwrap();
-        doc.set(&Path::root(), EditValue::Scalar(ScalarValue::String("hello".to_string()))).unwrap();
+        doc.set(&Path::root(), EditValue::Scalar(ScalarValue::String("hello".to_string())))
+            .unwrap();
         let rendered = doc.render();
         let reparsed = tpt_yaml_core::parse(&rendered).unwrap();
         match &reparsed.node(reparsed.root().unwrap()).unwrap().kind {

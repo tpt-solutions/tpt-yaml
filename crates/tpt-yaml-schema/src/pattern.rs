@@ -1,4 +1,4 @@
-﻿//! Minimal regex-subset matcher for JSON Schema `pattern`/`patternProperties`. Full ECMA-262
+//! Minimal regex-subset matcher for JSON Schema `pattern`/`patternProperties`. Full ECMA-262
 //! regex is out of scope for a zero-extra-dependency crate; this supports the pragmatic subset
 //! real schemas actually use: `^`/`$` anchors, `.`, `*`, `+`, `?`, character classes `[...]`
 //! (with ranges and `^` negation), and the escapes `\\d \\w \\s \\D \\W \\S` (both inside and
@@ -166,7 +166,10 @@ fn parse_class(chars: &[char], pos: &mut usize) -> Result<(Vec<ClassItem>, bool)
             c
         };
         // Range `a-z` (a `-` not followed by `]` and not first).
-        if chars.get(*pos) == Some(&'-') && chars.get(*pos + 1) != Some(&']') && chars.get(*pos + 1).is_some() {
+        if chars.get(*pos) == Some(&'-')
+            && chars.get(*pos + 1) != Some(&']')
+            && chars.get(*pos + 1).is_some()
+        {
             *pos += 1;
             let hi = *chars.get(*pos).ok_or(())?;
             *pos += 1;
@@ -181,11 +184,9 @@ impl Pattern {
     /// Whether `text` *contains* a match (ECMA regex `search` semantics).
     pub fn is_match(&self, text: &str) -> bool {
         let chars: Vec<char> = text.chars().collect();
-        let start = if self.anchored_start { 0 } else { 0 };
         if self.anchored_start {
             return match_seq(&self.ast, &chars, 0).is_some();
         }
-        let _ = start;
         for offset in 0..=chars.len() {
             if match_seq(&self.ast, &chars, offset).is_some() {
                 return true;

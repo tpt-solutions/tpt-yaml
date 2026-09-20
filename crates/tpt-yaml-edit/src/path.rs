@@ -57,13 +57,15 @@ pub fn child_index(document: &Document, parent: NodeId, key: &Key) -> Result<Opt
         (Some(NodeKind::Mapping(entries)), Key::Field(name)) => {
             Ok(entries.iter().position(|&(k, _)| key_matches(document, k, name)))
         }
-        (Some(NodeKind::Sequence(items)), Key::Index(i)) => Ok(if *i < items.len() { Some(*i) } else { None }),
+        (Some(NodeKind::Sequence(items)), Key::Index(i)) => {
+            Ok(if *i < items.len() { Some(*i) } else { None })
+        }
         _ => Err(Error::TypeMismatch),
     }
 }
 
 fn step(document: &Document, current: NodeId, key: &Key) -> Result<NodeId, Error> {
-    let index = child_index(document, current, key)?.ok_or_else(|| match key {
+    let index = child_index(document, current, key)?.ok_or(match key {
         Key::Field(_) => Error::KeyNotFound,
         Key::Index(_) => Error::IndexOutOfBounds,
     })?;

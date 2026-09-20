@@ -61,32 +61,83 @@ pub struct Token {
     pub indent: usize,
 }
 
+/// A pull-based tokenizer.
+///
+/// [`Lexer::next_token`] hands out one token at a time and only ever buffers a single physical
+/// line's worth of tokens, so a caller that pulls lazily never materializes the token stream for
+/// the whole source. [`Lexer::lex`] is the eager convenience wrapper that drains it into a `Vec`,
+/// preserving the eager behaviour this crate has always had.
 pub struct Lexer<'a> {
     source: &'a str,
+    /// Byte offset of the next physical line to scan.
+    line_start: usize,
+    /// Tokens produced for one physical line but not yet handed out.
+    queue: Vec<Token>,
+    queue_pos: usize,
+    /// Set once the final [`TokenKind::Eof`] token has been handed out.
+    eof_done: bool,
 }
 
 impl<'a> Lexer<'a> {
     pub fn new(source: &'a str) -> Self {
-        Self { source }
+        Self { source, line_start: 0, queue: Vec::new(), queue_pos: 0, eof_done: false }
     }
 
-    pub fn lex(self) -> Result<Vec<Token>, YamlError> {
-        let mut tokens = Vec::new();
-        let mut line_start = 0usize;
-
-        while line_start < self.source.len() {
-            let (content_end, next_start) = self.line_bounds(line_start);
-            let line = &self.source[line_start..content_end];
-            let indent = self.leading_indent(line, line_start)?;
-
-            if indent == line.len() {
-                tokens.push(self.token(TokenKind::BlankLine, line_start, content_end, indent));
-                line_start = next_start;
-                continue;
+    /// Pulls the next token, or `None` once the final [`TokenKind::Eof`] token has been returned.
+    ///
+    /// This is what makes `tpt-yaml-core`'s event parser ([`crate::stream`]) constant-memory with
+    /// respect to the number of tokens in the source: at most one line of tokens is ever live.
+    pub fn next_token(&mut self) -> Result<Option<Token>, YamlError> {
+        loop {
+            if self.queue_pos < self.queue.len() {
+                let token = self.queue[self.queue_pos].clone();
+                self.queue_pos += 1;
+                if self.queue_pos == self.queue.len() {
+                    self.queue.clear();
+                    self.queue_pos = 0;
+                }
+                return Ok(Some(token));
             }
+            if self.eof_done {
+                return Ok(None);
+            }
+            if self.line_start >= self.source.len() {
+                self.eof_done = true;
+                let span = self.span(self.source.len(), self.source.len());
+                return Ok(Some(Token { kind: TokenKind::Eof, span, indent: 0 }));
+            }
+            self.scan_line()?;
+        }
+    }
 
+    /// Tokenizes the entire source at once — equivalent to draining [`Self::next_token`].
+    pub fn lex(mut self) -> Result<Vec<Token>, YamlError> {
+        let mut tokens = Vec::new();
+        while let Some(token) = self.next_token()? {
+            let is_eof = matches!(token.kind, TokenKind::Eof);
+            tokens.push(token);
+            if is_eof {
+                break;
+            }
+        }
+        Ok(tokens)
+    }
+
+    /// Scans the physical line at `self.line_start` into `self.queue`, then advances
+    /// `self.line_start` past it (or past the entire block scalar it introduced).
+    fn scan_line(&mut self) -> Result<(), YamlError> {
+        let line_start = self.line_start;
+        let (content_end, next_start) = self.line_bounds(line_start);
+        let line = &self.source[line_start..content_end];
+        let indent = self.leading_indent(line, line_start)?;
+
+        let mut tokens = Vec::new();
+        let mut jump_to = None;
+
+        if indent == line.len() {
+            tokens.push(self.token(TokenKind::BlankLine, line_start, content_end, indent));
+        } else {
             let mut col = indent;
-            let mut jump_to = None;
 
             while col < line.len() {
                 let ch = line[col..].chars().next().unwrap();
@@ -231,16 +282,12 @@ impl<'a> Lexer<'a> {
                 ));
                 col = end;
             }
-
-            line_start = jump_to.unwrap_or(next_start);
         }
 
-        tokens.push(Token {
-            kind: TokenKind::Eof,
-            span: self.span(self.source.len(), self.source.len()),
-            indent: 0,
-        });
-        Ok(tokens)
+        self.queue = tokens;
+        self.queue_pos = 0;
+        self.line_start = jump_to.unwrap_or(next_start);
+        Ok(())
     }
 
     /// Returns `(content_end, next_line_start)` for the physical line beginning at `start`:

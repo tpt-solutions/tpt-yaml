@@ -1,4 +1,4 @@
-﻿use alloc::string::String;
+use alloc::string::String;
 use alloc::vec::Vec;
 use tpt_yaml_core::ScalarValue;
 
@@ -54,10 +54,7 @@ impl EditValue {
                 Self::Sequence(items.iter().map(Self::from_serde_value).collect())
             }
             tpt_yaml_serde::Value::Mapping(entries) => Self::Mapping(
-                entries
-                    .iter()
-                    .map(|(k, v)| (serde_key(k), Self::from_serde_value(v)))
-                    .collect(),
+                entries.iter().map(|(k, v)| (serde_key(k), Self::from_serde_value(v))).collect(),
             ),
         }
     }

@@ -24,4 +24,6 @@ typed = ["dep:tpt-yaml-serde", "tpt-yaml-serde/std"]
 json-schema = ["dep:serde_json"]
 
 [dev-dependencies]
-proptest = "1"
+# See `tpt-yaml-core/Cargo.toml`'s comment: capped below 1.9 to stay within this workspace's
+# MSRV (1.75).
+proptest = ">=1, <1.9"

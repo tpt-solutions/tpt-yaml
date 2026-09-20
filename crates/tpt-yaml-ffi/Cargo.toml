@@ -32,10 +32,21 @@ tpt-yaml-edit = { path = "../tpt-yaml-edit", version = "0.1.0", optional = true 
 tpt-yaml-serde = { path = "../tpt-yaml-serde", version = "0.1.0", optional = true }
 
 [build-dependencies]
-cbindgen = { version = "0.29", default-features = false }
+# Optional: see the `generate-header` feature below. `cbindgen` 0.29's own dependency chain
+# (via `toml`/`indexmap`/`hashbrown`) has drifted past this workspace's MSRV (1.75), so it can't
+# be an unconditional build-dependency without breaking the `msrv` CI job for every crate in the
+# workspace (Cargo resolves build-dependencies for the whole build graph, not just the crate that
+# declares them). Making it optional keeps header generation working for normal development
+# while letting the MSRV job opt out of it with `--no-default-features`.
+cbindgen = { version = "0.29", default-features = false, optional = true }
 
 [features]
-default = []
+default = ["generate-header"]
+# Regenerates `include/tpt_yaml.h` via `cbindgen` on every build (see `build.rs`). Left enabled
+# by default for normal development; the `msrv` CI job builds this crate with
+# `--no-default-features` instead, since `cbindgen`'s own MSRV has drifted past 1.75 (see the
+# `[build-dependencies]` comment above). The checked-in header is unaffected either way.
+generate-header = ["dep:cbindgen"]
 # Reserved for a future typed/serde-routed FFI surface (e.g. round-tripping through
 # `tpt-yaml-serde::Value`); not yet exposed by any `extern "C"` function.
 typed = ["dep:tpt-yaml-serde"]

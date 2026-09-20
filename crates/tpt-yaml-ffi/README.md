@@ -106,16 +106,23 @@ arena length.
 ## Header generation
 
 `build.rs` runs [`cbindgen`](https://github.com/mozilla/cbindgen) against this crate's
-`extern "C"` surface on every build and (re)writes `include/tpt_yaml.h`, configured via
-`cbindgen.toml`. The header is also checked into the repository (not gitignored) so it's
-available even without running the generator — e.g. reading the API on GitHub, or building
-from an environment that can't fetch `cbindgen`'s dependencies.
+`extern "C"` surface on every build (unless built with `--no-default-features`, see below) and
+(re)writes `include/tpt_yaml.h`, configured via `cbindgen.toml`. The header is also checked into
+the repository (not gitignored) so it's available even without running the generator — e.g.
+reading the API on GitHub, or building from an environment that can't fetch `cbindgen`'s
+dependencies.
 
-**CI gap**: there is currently no CI job that regenerates the header and diffs it against
-the checked-in copy to catch drift (a hand-edit or a `cbindgen.toml`/signature change that
-wasn't followed by a rebuild). `build.rs` keeps it honest for anyone who runs
-`cargo build` locally, but wiring an explicit CI check is still open work — see `todo.md`
-§6.
+Header generation lives behind the `generate-header` feature, which is on by default. It can be
+turned off (`--no-default-features`) to skip `cbindgen` entirely, which is otherwise an
+unconditional build-dependency: `cbindgen` 0.29's own dependency chain has drifted past this
+workspace's MSRV (1.75), and Cargo resolves build-dependencies for the whole build graph, so
+leaving it unconditional would break the `msrv` CI job for every crate in the workspace, not
+just this one. The `msrv` job builds this crate with `--no-default-features`; the checked-in
+header ships either way.
+
+The `ffi-header` CI job additionally rebuilds the crate and runs `git diff --exit-code`
+against the checked-in header, so a hand-edit or a `cbindgen.toml`/signature change that
+wasn't followed by a rebuild fails CI instead of silently drifting.
 
 ## Versioning policy
 

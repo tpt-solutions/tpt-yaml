@@ -136,7 +136,8 @@ fn cmd_check(args: impl Iterator<Item = String>) -> i32 {
             ))
         }
     };
-    let options = ParserOptions { yaml_version: version, strict_version, ..ParserOptions::default() };
+    let options =
+        ParserOptions { yaml_version: version, strict_version, ..ParserOptions::default() };
 
     let schema = match schema_path {
         Some(path) => match fs::read_to_string(&path) {
@@ -314,7 +315,9 @@ fn value_to_json(value: &tpt_yaml_serde::Value) -> serde_json::Value {
             .map(serde_json::Value::Number)
             .unwrap_or(serde_json::Value::Null),
         Value::String(s) => serde_json::Value::String(s.clone()),
-        Value::Sequence(items) => serde_json::Value::Array(items.iter().map(value_to_json).collect()),
+        Value::Sequence(items) => {
+            serde_json::Value::Array(items.iter().map(value_to_json).collect())
+        }
         Value::Mapping(entries) => serde_json::Value::Object(
             entries.iter().map(|(k, v)| (value_to_json_key(k), value_to_json(v))).collect(),
         ),
@@ -353,7 +356,9 @@ fn cmd_convert(args: impl Iterator<Item = String>) -> i32 {
     let to = match to.as_deref() {
         Some("json") => "json",
         Some("yaml") => "yaml",
-        Some(other) => return usage_error(&format!("invalid --to '{other}' (expected json or yaml)")),
+        Some(other) => {
+            return usage_error(&format!("invalid --to '{other}' (expected json or yaml)"))
+        }
         None => return usage_error("convert requires --to json|yaml"),
     };
 
@@ -511,7 +516,8 @@ fn diff_nodes(
             };
             for &(key_id, value_id) in a {
                 let Some(name) = key_name(doc_a, key_id) else { continue };
-                match b.iter().find(|&&(k, _)| key_name(doc_b, k).as_deref() == Some(name.as_str())) {
+                match b.iter().find(|&&(k, _)| key_name(doc_b, k).as_deref() == Some(name.as_str()))
+                {
                     Some(&(_, other_value)) => {
                         path.push(Key::Field(name));
                         diff_nodes(doc_a, value_id, doc_b, other_value, path, out);
@@ -519,7 +525,11 @@ fn diff_nodes(
                     }
                     None => {
                         path.push(Key::Field(name));
-                        out.push(format!("- {}: {}", path_to_string(path), describe(doc_a, value_id)));
+                        out.push(format!(
+                            "- {}: {}",
+                            path_to_string(path),
+                            describe(doc_a, value_id)
+                        ));
                         path.pop();
                     }
                 }

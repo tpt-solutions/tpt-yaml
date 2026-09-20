@@ -96,9 +96,8 @@ impl JsonType {
                 tpt_yaml_core::ScalarValue::Int(_) | tpt_yaml_core::ScalarValue::Float(_) => {
                     Self::Number
                 }
-                tpt_yaml_core::ScalarValue::String(_) | tpt_yaml_core::ScalarValue::Timestamp(_) => {
-                    Self::String
-                }
+                tpt_yaml_core::ScalarValue::String(_)
+                | tpt_yaml_core::ScalarValue::Timestamp(_) => Self::String,
             },
             NodeKind::Mapping(_) => Self::Object,
             NodeKind::Sequence(_) => Self::Array,
@@ -174,9 +173,8 @@ impl EnumValue {
                 tpt_yaml_core::ScalarValue::Bool(b) => Self::Bool(*b),
                 tpt_yaml_core::ScalarValue::Int(i) => Self::Number(*i as f64),
                 tpt_yaml_core::ScalarValue::Float(f) => Self::Number(*f),
-                tpt_yaml_core::ScalarValue::String(s) | tpt_yaml_core::ScalarValue::Timestamp(s) => {
-                    Self::String(s.clone())
-                }
+                tpt_yaml_core::ScalarValue::String(s)
+                | tpt_yaml_core::ScalarValue::Timestamp(s) => Self::String(s.clone()),
             },
             _ => None?,
         })
@@ -191,14 +189,14 @@ impl EnumValue {
                 matches!(scalar.value, tpt_yaml_core::ScalarValue::Null)
             }
             (NodeKind::Scalar(scalar), Self::Bool(b)) => scalar.value.as_bool() == Some(*b),
-            (NodeKind::Scalar(scalar), Self::Number(n)) => {
-                match scalar.value {
-                    tpt_yaml_core::ScalarValue::Int(i) => i as f64 == *n,
-                    tpt_yaml_core::ScalarValue::Float(f) => f == *n,
-                    _ => false,
-                }
+            (NodeKind::Scalar(scalar), Self::Number(n)) => match scalar.value {
+                tpt_yaml_core::ScalarValue::Int(i) => i as f64 == *n,
+                tpt_yaml_core::ScalarValue::Float(f) => f == *n,
+                _ => false,
+            },
+            (NodeKind::Scalar(scalar), Self::String(s)) => {
+                scalar.value.as_str() == Some(s.as_str())
             }
-            (NodeKind::Scalar(scalar), Self::String(s)) => scalar.value.as_str() == Some(s.as_str()),
             _ => false,
         }
     }
@@ -215,7 +213,8 @@ impl SchemaDocument {
     /// Loads a schema from YAML source, dogfooding [`tpt_yaml_core::parse`] for the parse.
     pub fn from_yaml_str(source: &str) -> Result<Self, Error> {
         let document = tpt_yaml_core::parse(source)?;
-        let root = document.root().ok_or_else(|| Error::InvalidSchema("empty document".to_string()))?;
+        let root =
+            document.root().ok_or_else(|| Error::InvalidSchema("empty document".to_string()))?;
         let (root, defs) = compile_root(&document, root)?;
         Ok(Self { root, defs })
     }
@@ -243,16 +242,7 @@ impl SchemaDocument {
     ) -> ValidationReport {
         let mut report = ValidationReport::default();
         let mut path = String::new();
-        validate_node(
-            document,
-            root,
-            &self.root,
-            &self.defs,
-            settings,
-            0,
-            &mut path,
-            &mut report,
-        );
+        validate_node(document, root, &self.root, &self.defs, settings, 0, &mut path, &mut report);
         report.deterministic();
         report
     }
@@ -311,10 +301,10 @@ fn json_mapping_entries(
     is_root: bool,
 ) -> Result<Schema, Error> {
     if let Some(serde_json::Value::String(name)) = obj.get("$ref") {
-        let internal = name
-            .strip_prefix("#/$defs/")
-            .or_else(|| name.strip_prefix("#/"))
-            .ok_or_else(|| Error::InvalidSchema(format!("only internal $refs are supported: {name}")))?;
+        let internal =
+            name.strip_prefix("#/$defs/").or_else(|| name.strip_prefix("#/")).ok_or_else(|| {
+                Error::InvalidSchema(format!("only internal $refs are supported: {name}"))
+            })?;
         if !is_root && !defs.contains_key(internal) {
             return Err(Error::InvalidSchema(format!("unknown $ref target: {name}")));
         }
@@ -327,16 +317,18 @@ fn json_mapping_entries(
         let opt_f64 = |key: &str| obj.get(key).and_then(|v| v.as_f64());
         return Ok(match json_type {
             JsonType::Null | JsonType::Boolean => Schema::Type(json_type),
-            JsonType::String => Schema::String {
-                min_length: opt_usize("minLength"),
-                max_length: opt_usize("maxLength"),
-                pattern: match obj.get("pattern") {
-                    Some(serde_json::Value::String(source)) => pattern::compile(source)
-                        .map(Some)
-                        .map_err(|_| Error::InvalidPattern(source.clone()))?,
-                    _ => None,
-                },
-            },
+            JsonType::String => {
+                Schema::String {
+                    min_length: opt_usize("minLength"),
+                    max_length: opt_usize("maxLength"),
+                    pattern: match obj.get("pattern") {
+                        Some(serde_json::Value::String(source)) => pattern::compile(source)
+                            .map(Some)
+                            .map_err(|_| Error::InvalidPattern(source.clone()))?,
+                        _ => None,
+                    },
+                }
+            }
             JsonType::Number => Schema::Number {
                 minimum: opt_f64("minimum"),
                 maximum: opt_f64("maximum"),
@@ -359,7 +351,11 @@ fn json_mapping_entries(
                         .iter()
                         .map(|(name, v)| Ok::<_, Error>((name.clone(), json_to_schema(v)?)))
                         .collect::<Result<Vec<_>, _>>()?,
-                    Some(_) => return Err(Error::InvalidSchema("properties must be an object".to_string())),
+                    Some(_) => {
+                        return Err(Error::InvalidSchema(
+                            "properties must be an object".to_string(),
+                        ))
+                    }
                     None => Vec::new(),
                 },
                 required: match obj.get("required") {
@@ -367,10 +363,14 @@ fn json_mapping_entries(
                         .iter()
                         .map(|v| match v {
                             serde_json::Value::String(s) => Ok::<_, Error>(s.clone()),
-                            _ => Err(Error::InvalidSchema("required entries must be strings".to_string())),
+                            _ => Err(Error::InvalidSchema(
+                                "required entries must be strings".to_string(),
+                            )),
                         })
                         .collect::<Result<Vec<_>, _>>()?,
-                    Some(_) => return Err(Error::InvalidSchema("required must be an array".to_string())),
+                    Some(_) => {
+                        return Err(Error::InvalidSchema("required must be an array".to_string()))
+                    }
                     None => Vec::new(),
                 },
                 additional: match obj.get("additionalProperties") {
@@ -413,8 +413,9 @@ fn compile_root(
             if let Some(NodeKind::Mapping(def_entries)) = document.node(*value_id).map(|n| &n.kind)
             {
                 for (def_key_id, def_value_id) in def_entries {
-                    let def_name = scalar_key(document, *def_key_id)
-                        .ok_or_else(|| Error::InvalidSchema("$defs keys must be strings".to_string()))?;
+                    let def_name = scalar_key(document, *def_key_id).ok_or_else(|| {
+                        Error::InvalidSchema("$defs keys must be strings".to_string())
+                    })?;
                     let schema = compile_schema(document, *def_value_id)?;
                     defs.insert(def_name, schema);
                 }
@@ -456,10 +457,8 @@ fn compile_mapping_entries(
     if let Some(ref_id) = by_key("$ref") {
         let name = scalar_key(document, ref_id)
             .ok_or_else(|| Error::InvalidSchema("$ref must be a string".to_string()))?;
-        let internal = name
-            .strip_prefix("#/$defs/")
-            .or_else(|| name.strip_prefix("#/"))
-            .ok_or_else(|| {
+        let internal =
+            name.strip_prefix("#/$defs/").or_else(|| name.strip_prefix("#/")).ok_or_else(|| {
                 Error::InvalidSchema(format!("only internal $refs are supported: {name}"))
             })?;
         if !is_root && !defs.contains_key(internal) && !entries_is_def_of_self(defs, internal) {
@@ -494,11 +493,7 @@ fn compile_mapping_entries(
         return Ok(Schema::Const(value));
     }
 
-    for (name, variant) in [
-        ("oneOf", 0),
-        ("anyOf", 1),
-        ("allOf", 2),
-    ] {
+    for (name, variant) in [("oneOf", 0), ("anyOf", 1), ("allOf", 2)] {
         if let Some(seq_id) = by_key(name) {
             let Some(NodeKind::Sequence(items)) = document.node(seq_id).map(|n| &n.kind) else {
                 return Err(Error::InvalidSchema(format!("{name} must be a sequence")));
@@ -554,12 +549,13 @@ fn compile_typed(
             multiple_of: optional_f64(document, by_key("multipleOf")),
         },
         JsonType::Array => Schema::Array {
-            items: by_key("items").map(|id| compile_schema(document, id)).transpose()?.map(Box::new),
+            items: by_key("items")
+                .map(|id| compile_schema(document, id))
+                .transpose()?
+                .map(Box::new),
             min_items: optional_usize(document, by_key("minItems")),
             max_items: optional_usize(document, by_key("maxItems")),
-            unique_items: by_key("uniqueItems")
-                .and_then(|id| scalar_key(document, id))
-                .as_deref()
+            unique_items: by_key("uniqueItems").and_then(|id| scalar_key(document, id)).as_deref()
                 == Some("true"),
         },
         JsonType::Object => Schema::Object {
@@ -571,10 +567,17 @@ fn compile_typed(
                             let name = scalar_key(document, k).ok_or_else(|| {
                                 Error::InvalidSchema("property keys must be strings".to_string())
                             })?;
-                            Ok::<(String, Schema), Error>((entry_name(&name), compile_schema(document, v)?))
+                            Ok::<(String, Schema), Error>((
+                                entry_name(&name),
+                                compile_schema(document, v)?,
+                            ))
                         })
                         .collect::<Result<Vec<_>, _>>()?,
-                    _ => return Err(Error::InvalidSchema("properties must be a mapping".to_string())),
+                    _ => {
+                        return Err(Error::InvalidSchema(
+                            "properties must be a mapping".to_string(),
+                        ))
+                    }
                 },
                 None => Vec::new(),
             },
@@ -588,7 +591,9 @@ fn compile_typed(
                             })
                         })
                         .collect::<Result<Vec<_>, _>>()?,
-                    _ => return Err(Error::InvalidSchema("required must be a sequence".to_string())),
+                    _ => {
+                        return Err(Error::InvalidSchema("required must be a sequence".to_string()))
+                    }
                 },
                 None => Vec::new(),
             },
@@ -631,19 +636,20 @@ fn optional_f64(document: &Document, id: Option<NodeId>) -> Option<f64> {
     }
 }
 
-fn optional_pattern(document: &Document, id: Option<NodeId>) -> Result<Option<pattern::Pattern>, Error> {
+fn optional_pattern(
+    document: &Document,
+    id: Option<NodeId>,
+) -> Result<Option<pattern::Pattern>, Error> {
     let Some(id) = id else { return Ok(None) };
     let source = match &document.node(id).map(|n| &n.kind) {
-        Some(NodeKind::Scalar(scalar)) => {
-            scalar.value.as_str().map(|s| s.to_string()).ok_or_else(|| {
-                Error::InvalidSchema("pattern must be a string".to_string())
-            })?
-        }
+        Some(NodeKind::Scalar(scalar)) => scalar
+            .value
+            .as_str()
+            .map(|s| s.to_string())
+            .ok_or_else(|| Error::InvalidSchema("pattern must be a string".to_string()))?,
         _ => return Err(Error::InvalidSchema("pattern must be a string".to_string())),
     };
-    pattern::compile(&source)
-        .map(Some)
-        .map_err(|_| Error::InvalidPattern(source))
+    pattern::compile(&source).map(Some).map_err(|_| Error::InvalidPattern(source))
 }
 /// The category of a [`ValidationIssue`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -745,8 +751,7 @@ impl ValidationReport {
     /// Sorts issues by (path, kind) so two runs over the same document compare equal — the
     /// determinism invariant the proptest asserts.
     fn deterministic(&mut self) {
-        self.issues
-            .sort_by(|a, b| (&a.path, a.kind as u32).cmp(&(&b.path, b.kind as u32)));
+        self.issues.sort_by(|a, b| (&a.path, a.kind as u32).cmp(&(&b.path, b.kind as u32)));
     }
 }
 
@@ -830,7 +835,14 @@ fn validate_node(
             if settings.types {
                 let actual = JsonType::of_node(document, node);
                 if actual.is_none() {
-                    issue(document, node, path, IssueKind::RefCycle, "alias could not resolve", report);
+                    issue(
+                        document,
+                        node,
+                        path,
+                        IssueKind::RefCycle,
+                        "alias could not resolve",
+                        report,
+                    );
                 } else if actual != Some(*json_type) {
                     let actual_name = actual.map(|t| t.name()).unwrap_or("unknown");
                     issue(
@@ -851,7 +863,14 @@ fn validate_node(
         }
         Schema::Const(value) => {
             if settings.enums && !value.node_matches(document, node) {
-                issue(document, node, path, IssueKind::ConstMismatch, "value not equal to const", report);
+                issue(
+                    document,
+                    node,
+                    path,
+                    IssueKind::ConstMismatch,
+                    "value not equal to const",
+                    report,
+                );
             }
         }
         Schema::String { min_length, max_length, pattern: pat } => {
@@ -859,23 +878,52 @@ fn validate_node(
                 // `type: string` compiles to this variant, so the arm carries the type check
                 // itself: a non-string is a TypeMismatch and string constraints don't apply.
                 if JsonType::of_node(document, node) != Some(JsonType::String) {
-                    let actual = JsonType::of_node(document, node).map(|t| t.name()).unwrap_or("unknown");
-                    issue(document, node, path, IssueKind::TypeMismatch, format!("expected string, found {actual}"), report);
+                    let actual =
+                        JsonType::of_node(document, node).map(|t| t.name()).unwrap_or("unknown");
+                    issue(
+                        document,
+                        node,
+                        path,
+                        IssueKind::TypeMismatch,
+                        format!("expected string, found {actual}"),
+                        report,
+                    );
                 } else {
                     let Some(scalar) = scalar_str(document, node) else { return };
                     if let Some(min) = min_length {
                         if scalar.chars().count() < *min {
-                            issue(document, node, path, IssueKind::MinLength, format!("shorter than {min}"), report);
+                            issue(
+                                document,
+                                node,
+                                path,
+                                IssueKind::MinLength,
+                                format!("shorter than {min}"),
+                                report,
+                            );
                         }
                     }
                     if let Some(max) = max_length {
                         if scalar.chars().count() > *max {
-                            issue(document, node, path, IssueKind::MaxLength, format!("longer than {max}"), report);
+                            issue(
+                                document,
+                                node,
+                                path,
+                                IssueKind::MaxLength,
+                                format!("longer than {max}"),
+                                report,
+                            );
                         }
                     }
                     if let Some(pat) = pat {
                         if !pat.is_match(&scalar) {
-                            issue(document, node, path, IssueKind::PatternMismatch, "string does not match pattern", report);
+                            issue(
+                                document,
+                                node,
+                                path,
+                                IssueKind::PatternMismatch,
+                                "string does not match pattern",
+                                report,
+                            );
                         }
                     }
                 }
@@ -884,122 +932,263 @@ fn validate_node(
         Schema::Number { minimum, maximum, exclusive_minimum, exclusive_maximum, multiple_of } => {
             if settings.numbers {
                 let Some(value) = node_number(document, node) else {
-                    let actual = JsonType::of_node(document, node).map(|t| t.name()).unwrap_or("unknown");
-                    issue(document, node, path, IssueKind::TypeMismatch, format!("expected number, found {actual}"), report);
+                    let actual =
+                        JsonType::of_node(document, node).map(|t| t.name()).unwrap_or("unknown");
+                    issue(
+                        document,
+                        node,
+                        path,
+                        IssueKind::TypeMismatch,
+                        format!("expected number, found {actual}"),
+                        report,
+                    );
                     return;
                 };
-                    if let Some(bound) = minimum {
-                        if value < *bound {
-                            issue(document, node, path, IssueKind::Minimum, format!("{value} below {bound}"), report);
-                        }
+                if let Some(bound) = minimum {
+                    if value < *bound {
+                        issue(
+                            document,
+                            node,
+                            path,
+                            IssueKind::Minimum,
+                            format!("{value} below {bound}"),
+                            report,
+                        );
                     }
-                    if let Some(bound) = maximum {
-                        if value > *bound {
-                            issue(document, node, path, IssueKind::Maximum, format!("{value} above {bound}"), report);
-                        }
+                }
+                if let Some(bound) = maximum {
+                    if value > *bound {
+                        issue(
+                            document,
+                            node,
+                            path,
+                            IssueKind::Maximum,
+                            format!("{value} above {bound}"),
+                            report,
+                        );
                     }
-                    if let Some(bound) = exclusive_minimum {
-                        if value <= *bound {
-                            issue(document, node, path, IssueKind::ExclusiveMinimum, format!("{value} at or below {bound}"), report);
-                        }
+                }
+                if let Some(bound) = exclusive_minimum {
+                    if value <= *bound {
+                        issue(
+                            document,
+                            node,
+                            path,
+                            IssueKind::ExclusiveMinimum,
+                            format!("{value} at or below {bound}"),
+                            report,
+                        );
                     }
-                    if let Some(bound) = exclusive_maximum {
-                        if value >= *bound {
-                            issue(document, node, path, IssueKind::ExclusiveMaximum, format!("{value} at or above {bound}"), report);
-                        }
+                }
+                if let Some(bound) = exclusive_maximum {
+                    if value >= *bound {
+                        issue(
+                            document,
+                            node,
+                            path,
+                            IssueKind::ExclusiveMaximum,
+                            format!("{value} at or above {bound}"),
+                            report,
+                        );
                     }
-                    if let Some(step) = multiple_of {
-                        if *step != 0.0 && (value / step).fract() != 0.0 {
-                            issue(document, node, path, IssueKind::MultipleOf, format!("{value} not a multiple of {step}"), report);
-                        }
+                }
+                if let Some(step) = multiple_of {
+                    if *step != 0.0 && (value / step).fract() != 0.0 {
+                        issue(
+                            document,
+                            node,
+                            path,
+                            IssueKind::MultipleOf,
+                            format!("{value} not a multiple of {step}"),
+                            report,
+                        );
                     }
+                }
             }
         }
         Schema::Array { items, min_items, max_items, unique_items } => {
             if settings.arrays {
-                let Some(NodeKind::Sequence(elements)) = document.node(node).map(|n| &n.kind) else {
-                    let actual = JsonType::of_node(document, node).map(|t| t.name()).unwrap_or("unknown");
-                    issue(document, node, path, IssueKind::TypeMismatch, format!("expected array, found {actual}"), report);
+                let Some(NodeKind::Sequence(elements)) = document.node(node).map(|n| &n.kind)
+                else {
+                    let actual =
+                        JsonType::of_node(document, node).map(|t| t.name()).unwrap_or("unknown");
+                    issue(
+                        document,
+                        node,
+                        path,
+                        IssueKind::TypeMismatch,
+                        format!("expected array, found {actual}"),
+                        report,
+                    );
                     return;
                 };
-                    if let Some(min) = min_items {
-                        if elements.len() < *min {
-                            issue(document, node, path, IssueKind::MinItems, format!("fewer than {min} items"), report);
-                        }
+                if let Some(min) = min_items {
+                    if elements.len() < *min {
+                        issue(
+                            document,
+                            node,
+                            path,
+                            IssueKind::MinItems,
+                            format!("fewer than {min} items"),
+                            report,
+                        );
                     }
-                    if let Some(max) = max_items {
-                        if elements.len() > *max {
-                            issue(document, node, path, IssueKind::MaxItems, format!("more than {max} items"), report);
-                        }
+                }
+                if let Some(max) = max_items {
+                    if elements.len() > *max {
+                        issue(
+                            document,
+                            node,
+                            path,
+                            IssueKind::MaxItems,
+                            format!("more than {max} items"),
+                            report,
+                        );
                     }
-                    if *unique_items {
-                        let mut dup_found = false;
-                        for (i, a) in elements.iter().enumerate() {
-                            for b in &elements[i + 1..] {
-                                if nodes_equal(document, *a, *b) {
-                                    issue(document, node, path, IssueKind::UniqueItems, "duplicate items", report);
-                                    dup_found = true;
-                                    break;
-                                }
-                            }
-                            if dup_found {
+                }
+                if *unique_items {
+                    let mut dup_found = false;
+                    for (i, a) in elements.iter().enumerate() {
+                        for b in &elements[i + 1..] {
+                            if nodes_equal(document, *a, *b) {
+                                issue(
+                                    document,
+                                    node,
+                                    path,
+                                    IssueKind::UniqueItems,
+                                    "duplicate items",
+                                    report,
+                                );
+                                dup_found = true;
                                 break;
                             }
                         }
-                    }
-                    if let Some(items) = items {
-                        for (i, &element) in elements.iter().enumerate() {
-                            path.push_str(if path.is_empty() { "" } else { "." });
-                            path.push_str(&i.to_string());
-                            validate_node(document, element, items, defs, settings, depth + 1, path, report);
-                            pop_path(path, i);
+                        if dup_found {
+                            break;
                         }
                     }
+                }
+                if let Some(items) = items {
+                    for (i, &element) in elements.iter().enumerate() {
+                        path.push_str(if path.is_empty() { "" } else { "." });
+                        path.push_str(&i.to_string());
+                        validate_node(
+                            document,
+                            element,
+                            items,
+                            defs,
+                            settings,
+                            depth + 1,
+                            path,
+                            report,
+                        );
+                        pop_path(path, i);
+                    }
+                }
             }
         }
         Schema::Object { properties, required, additional, min_properties, max_properties } => {
             if settings.objects {
                 let Some(NodeKind::Mapping(entries)) = document.node(node).map(|n| &n.kind) else {
-                    let actual = JsonType::of_node(document, node).map(|t| t.name()).unwrap_or("unknown");
-                    issue(document, node, path, IssueKind::TypeMismatch, format!("expected object, found {actual}"), report);
+                    let actual =
+                        JsonType::of_node(document, node).map(|t| t.name()).unwrap_or("unknown");
+                    issue(
+                        document,
+                        node,
+                        path,
+                        IssueKind::TypeMismatch,
+                        format!("expected object, found {actual}"),
+                        report,
+                    );
                     return;
                 };
-                    if let Some(min) = min_properties {
-                        if entries.len() < *min {
-                            issue(document, node, path, IssueKind::MinProperties, format!("fewer than {min} properties"), report);
-                        }
+                if let Some(min) = min_properties {
+                    if entries.len() < *min {
+                        issue(
+                            document,
+                            node,
+                            path,
+                            IssueKind::MinProperties,
+                            format!("fewer than {min} properties"),
+                            report,
+                        );
                     }
-                    if let Some(max) = max_properties {
-                        if entries.len() > *max {
-                            issue(document, node, path, IssueKind::MaxProperties, format!("more than {max} properties"), report);
-                        }
+                }
+                if let Some(max) = max_properties {
+                    if entries.len() > *max {
+                        issue(
+                            document,
+                            node,
+                            path,
+                            IssueKind::MaxProperties,
+                            format!("more than {max} properties"),
+                            report,
+                        );
                     }
-                    for name in required {
-                        if !entries.iter().any(|&(k, _)| scalar_key(document, k).as_deref() == Some(name.as_str())) {
-                            issue(document, node, path, IssueKind::RequiredMissing, format!("required property `{name}` missing"), report);
-                        }
+                }
+                for name in required {
+                    if !entries
+                        .iter()
+                        .any(|&(k, _)| scalar_key(document, k).as_deref() == Some(name.as_str()))
+                    {
+                        issue(
+                            document,
+                            node,
+                            path,
+                            IssueKind::RequiredMissing,
+                            format!("required property `{name}` missing"),
+                            report,
+                        );
                     }
-                    for &(key_id, value_id) in entries {
-                        let Some(name) = scalar_key(document, key_id) else { continue };
-                        if let Some((_, prop_schema)) = properties.iter().find(|(prop, _)| *prop == name) {
-                            path.push_str(if path.is_empty() { "" } else { "." });
-                            path.push_str(&name);
-                            validate_node(document, value_id, prop_schema, defs, settings, depth + 1, path, report);
-                            pop_path(path, &name);
-                        } else {
-                            match additional {
-                                Additional::Forbid => {
-                                    issue(document, node, path, IssueKind::AdditionalProperty, format!("property `{name}` not allowed"), report);
-                                }
-                                Additional::Schema(prop_schema) => {
-                                    path.push_str(if path.is_empty() { "" } else { "." });
-                                    path.push_str(&name);
-                                    validate_node(document, value_id, prop_schema, defs, settings, depth + 1, path, report);
-                                    pop_path(path, &name);
-                                }
-                                Additional::Allow => {}
+                }
+                for &(key_id, value_id) in entries {
+                    let Some(name) = scalar_key(document, key_id) else { continue };
+                    if let Some((_, prop_schema)) =
+                        properties.iter().find(|(prop, _)| *prop == name)
+                    {
+                        path.push_str(if path.is_empty() { "" } else { "." });
+                        path.push_str(&name);
+                        validate_node(
+                            document,
+                            value_id,
+                            prop_schema,
+                            defs,
+                            settings,
+                            depth + 1,
+                            path,
+                            report,
+                        );
+                        pop_path(path, &name);
+                    } else {
+                        match additional {
+                            Additional::Forbid => {
+                                issue(
+                                    document,
+                                    node,
+                                    path,
+                                    IssueKind::AdditionalProperty,
+                                    format!("property `{name}` not allowed"),
+                                    report,
+                                );
                             }
+                            Additional::Schema(prop_schema) => {
+                                path.push_str(if path.is_empty() { "" } else { "." });
+                                path.push_str(&name);
+                                validate_node(
+                                    document,
+                                    value_id,
+                                    prop_schema,
+                                    defs,
+                                    settings,
+                                    depth + 1,
+                                    path,
+                                    report,
+                                );
+                                pop_path(path, &name);
+                            }
+                            Additional::Allow => {}
                         }
+                    }
                 }
             }
         }
@@ -1008,7 +1197,14 @@ fn validate_node(
                 let mut sub = ValidationReport::default();
                 validate_node(document, node, inner, defs, settings, depth + 1, path, &mut sub);
                 if sub.is_valid() {
-                    issue(document, node, path, IssueKind::NotMatched, "matched `not` schema", report);
+                    issue(
+                        document,
+                        node,
+                        path,
+                        IssueKind::NotMatched,
+                        "matched `not` schema",
+                        report,
+                    );
                 }
             }
         }
@@ -1018,14 +1214,37 @@ fn validate_node(
                     .iter()
                     .filter(|schema| {
                         let mut sub = ValidationReport::default();
-                        validate_node(document, node, schema, defs, settings, depth + 1, path, &mut sub);
+                        validate_node(
+                            document,
+                            node,
+                            schema,
+                            defs,
+                            settings,
+                            depth + 1,
+                            path,
+                            &mut sub,
+                        );
                         sub.is_valid()
                     })
                     .count();
                 if matches == 0 {
-                    issue(document, node, path, IssueKind::OneOfMismatch, "matched none of oneOf", report);
+                    issue(
+                        document,
+                        node,
+                        path,
+                        IssueKind::OneOfMismatch,
+                        "matched none of oneOf",
+                        report,
+                    );
                 } else if matches > 1 {
-                    issue(document, node, path, IssueKind::OneOfAmbiguous, "matched several of oneOf", report);
+                    issue(
+                        document,
+                        node,
+                        path,
+                        IssueKind::OneOfAmbiguous,
+                        "matched several of oneOf",
+                        report,
+                    );
                 }
             }
         }
@@ -1035,12 +1254,28 @@ fn validate_node(
                     .iter()
                     .filter(|schema| {
                         let mut sub = ValidationReport::default();
-                        validate_node(document, node, schema, defs, settings, depth + 1, path, &mut sub);
+                        validate_node(
+                            document,
+                            node,
+                            schema,
+                            defs,
+                            settings,
+                            depth + 1,
+                            path,
+                            &mut sub,
+                        );
                         sub.is_valid()
                     })
                     .count();
                 if matches == 0 {
-                    issue(document, node, path, IssueKind::AnyOfMismatch, "matched none of anyOf", report);
+                    issue(
+                        document,
+                        node,
+                        path,
+                        IssueKind::AnyOfMismatch,
+                        "matched none of anyOf",
+                        report,
+                    );
                 }
             }
         }
@@ -1048,7 +1283,16 @@ fn validate_node(
             if settings.combinators {
                 for schema in schemas {
                     let mut sub = ValidationReport::default();
-                    validate_node(document, node, schema, defs, settings, depth + 1, path, &mut sub);
+                    validate_node(
+                        document,
+                        node,
+                        schema,
+                        defs,
+                        settings,
+                        depth + 1,
+                        path,
+                        &mut sub,
+                    );
                     for mut issue in sub.issues {
                         issue.node = node;
                         issue.span = document.span(node);
@@ -1066,7 +1310,14 @@ fn validate_node(
                     .or_else(|| name.strip_prefix("#/"))
                     .unwrap_or(name.as_str());
                 let Some(target) = defs.get(key) else {
-                    issue(document, node, path, IssueKind::RefUnresolved, format!("$ref `{name}` not in $defs"), report);
+                    issue(
+                        document,
+                        node,
+                        path,
+                        IssueKind::RefUnresolved,
+                        format!("$ref `{name}` not in $defs"),
+                        report,
+                    );
                     return;
                 };
                 validate_node(document, node, target, defs, settings, depth + 1, path, report);
@@ -1077,7 +1328,9 @@ fn validate_node(
 
 fn pop_path(path: &mut String, segment: impl ToString) {
     let segment = segment.to_string();
-    let new_len = path.len().saturating_sub(segment.len() + usize::from(!path.is_empty() && path.len() > segment.len()));
+    let new_len = path.len().saturating_sub(
+        segment.len() + usize::from(!path.is_empty() && path.len() > segment.len()),
+    );
     // Simplest correct approach: find the last `.`-separated segment and truncate it off.
     if let Some(pos) = path.rfind(&segment) {
         let mut cut = pos;
@@ -1138,7 +1391,9 @@ fn nodes_equal(document: &Document, a: NodeId, b: NodeId) -> bool {
         (Some(NodeKind::Mapping(x)), Some(NodeKind::Mapping(y))) => {
             x.len() == y.len()
                 && x.iter().all(|&(xk, xv)| {
-                    y.iter().any(|&(yk, yv)| nodes_equal(document, xk, yk) && nodes_equal(document, xv, yv))
+                    y.iter().any(|&(yk, yv)| {
+                        nodes_equal(document, xk, yk) && nodes_equal(document, xv, yv)
+                    })
                 })
         }
         _ => false,
@@ -1207,10 +1462,8 @@ $defs:
 
     #[test]
     fn one_of_any_of_all_of_and_not() {
-        let schema = SchemaDocument::from_yaml_str(
-            "oneOf:\n  - type: string\n  - type: number\n",
-        )
-        .unwrap();
+        let schema =
+            SchemaDocument::from_yaml_str("oneOf:\n  - type: string\n  - type: number\n").unwrap();
         let doc = tpt_yaml_core::parse("just a string").unwrap();
         assert!(schema.validate(&doc, doc.root().unwrap()).is_valid());
         // A scalar `"5"`... a plain `5` is a number in YAML: exactly one match.

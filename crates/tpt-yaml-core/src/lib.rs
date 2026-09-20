@@ -17,6 +17,7 @@ pub mod node;
 pub mod parser;
 pub mod resolve;
 pub mod span;
+pub mod stream;
 pub mod version;
 
 pub use diagnostics::{ErrorContext, ErrorKind, ParseError, YamlError};

@@ -37,7 +37,8 @@ pyo3::create_exception!(
 /// with their inner value kept).
 #[pyfunction]
 fn loads(py: Python<'_>, source: &str) -> PyResult<PyObject> {
-    let document = tpt_yaml_core::parse(source).map_err(|err| TptYamlError::new_err(err.to_string()))?;
+    let document =
+        tpt_yaml_core::parse(source).map_err(|err| TptYamlError::new_err(err.to_string()))?;
     let value = match document.root() {
         Some(root) => Value::from_node(&document, root),
         None => Value::Null,
@@ -166,7 +167,10 @@ mod tests {
             let rendered = dumps(dict.as_any()).unwrap();
             // Keys/values built fresh through `tpt_yaml_serde::Serializer` render double-quoted
             // (its default string style), so check content rather than exact quoting/spacing.
-            assert!(rendered.contains("\"a\": 1") || rendered.contains("a: 1"), "rendered = {rendered:?}");
+            assert!(
+                rendered.contains("\"a\": 1") || rendered.contains("a: 1"),
+                "rendered = {rendered:?}"
+            );
             assert!(rendered.contains('b'), "rendered = {rendered:?}");
 
             // Round-trip through `loads` to make sure it's valid YAML, not just plausible text.

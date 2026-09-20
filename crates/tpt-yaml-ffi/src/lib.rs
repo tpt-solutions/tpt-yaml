@@ -674,7 +674,8 @@ pub unsafe extern "C" fn tpt_yaml_mapping_get(
                 set_last_error("null key pointer with nonzero length");
                 return TptYamlErrorCode::NullPointer;
             }
-            let key_bytes = if key_len == 0 { &[] } else { slice::from_raw_parts(key_ptr, key_len) };
+            let key_bytes =
+                if key_len == 0 { &[] } else { slice::from_raw_parts(key_ptr, key_len) };
             let key = match std::str::from_utf8(key_bytes) {
                 Ok(key) => key,
                 Err(err) => {
@@ -820,9 +821,7 @@ mod tests {
         let key = "name";
         let mut value_node = 0u32;
         assert_eq!(
-            unsafe {
-                tpt_yaml_mapping_get(doc, root, key.as_ptr(), key.len(), &mut value_node)
-            },
+            unsafe { tpt_yaml_mapping_get(doc, root, key.as_ptr(), key.len(), &mut value_node) },
             TptYamlErrorCode::Ok
         );
         let mut ptr_out: *const c_char = ptr::null();
@@ -837,9 +836,7 @@ mod tests {
         let key = "count";
         let mut value_node = 0u32;
         assert_eq!(
-            unsafe {
-                tpt_yaml_mapping_get(doc, root, key.as_ptr(), key.len(), &mut value_node)
-            },
+            unsafe { tpt_yaml_mapping_get(doc, root, key.as_ptr(), key.len(), &mut value_node) },
             TptYamlErrorCode::Ok
         );
         let mut int_out = 0i64;
@@ -852,9 +849,7 @@ mod tests {
         let key = "ok";
         let mut value_node = 0u32;
         assert_eq!(
-            unsafe {
-                tpt_yaml_mapping_get(doc, root, key.as_ptr(), key.len(), &mut value_node)
-            },
+            unsafe { tpt_yaml_mapping_get(doc, root, key.as_ptr(), key.len(), &mut value_node) },
             TptYamlErrorCode::Ok
         );
         let mut bool_out = false;
@@ -878,7 +873,10 @@ mod tests {
         assert_eq!(len, 3);
 
         let mut item = 0u32;
-        assert_eq!(unsafe { tpt_yaml_sequence_item(doc, root, 1, &mut item) }, TptYamlErrorCode::Ok);
+        assert_eq!(
+            unsafe { tpt_yaml_sequence_item(doc, root, 1, &mut item) },
+            TptYamlErrorCode::Ok
+        );
         let mut value = 0i64;
         assert_eq!(unsafe { tpt_yaml_scalar_as_int(doc, item, &mut value) }, TptYamlErrorCode::Ok);
         assert_eq!(value, 2);

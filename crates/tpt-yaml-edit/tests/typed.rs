@@ -1,4 +1,4 @@
-﻿//! `typed`-feature coverage: `EditValue::typed` routes a `T: serde::Serialize` through
+//! `typed`-feature coverage: `EditValue::typed` routes a `T: serde::Serialize` through
 //! `tpt-yaml-serde`'s serializer, and the resulting arena content renders and re-parses like
 //! any hand-built `EditValue`.
 
@@ -31,7 +31,15 @@ fn typed_editvalue_replaces_the_whole_document() {
     };
     let by_key: Vec<(String, Value)> = entries
         .into_iter()
-        .map(|(k, v)| (match k { Value::String(s) => s, other => panic!("bad key {other:?}") }, v))
+        .map(|(k, v)| {
+            (
+                match k {
+                    Value::String(s) => s,
+                    other => panic!("bad key {other:?}"),
+                },
+                v,
+            )
+        })
         .collect();
     assert_eq!(by_key[0], ("name".to_string(), Value::String("demo".to_string())));
     assert_eq!(by_key[1], ("count".to_string(), Value::Int(3)));
@@ -39,10 +47,7 @@ fn typed_editvalue_replaces_the_whole_document() {
         by_key[2],
         (
             "tags".to_string(),
-            Value::Sequence(vec![
-                Value::String("a".to_string()),
-                Value::String("b".to_string()),
-            ])
+            Value::Sequence(vec![Value::String("a".to_string()), Value::String("b".to_string()),])
         )
     );
 }
