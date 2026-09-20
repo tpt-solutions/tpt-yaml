@@ -16,13 +16,17 @@ pub fn resolve_scalar(text: &str, version: YamlVersion) -> ScalarValue {
             return ScalarValue::Bool(false);
         }
     } else {
+        // YAML 1.1's core schema bool set is a superset of 1.2's: `y`/`yes`/`on` and friends
+        // *in addition to* `true`/`false` (not instead of them) — see the Norway-problem table
+        // in the YAML 1.1 spec. Omitting `true`/`false` here would make them resolve as
+        // `String` under 1.1 but `Bool` under 1.2, flagging the single most common YAML boolean
+        // spelling as version-ambiguous for no reason (see `ParserOptions::strict_version`).
         match text {
-            "y" | "Y" | "yes" | "Yes" | "YES" | "on" | "On" | "ON" => {
+            "y" | "Y" | "yes" | "Yes" | "YES" | "true" | "True" | "TRUE" | "on" | "On" | "ON" => {
                 return ScalarValue::Bool(true)
             }
-            "n" | "N" | "no" | "No" | "NO" | "off" | "Off" | "OFF" => {
-                return ScalarValue::Bool(false)
-            }
+            "n" | "N" | "no" | "No" | "NO" | "false" | "False" | "FALSE" | "off" | "Off"
+            | "OFF" => return ScalarValue::Bool(false),
             _ => {}
         }
     }

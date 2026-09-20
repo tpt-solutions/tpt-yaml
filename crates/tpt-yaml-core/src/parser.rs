@@ -15,7 +15,11 @@ pub struct ParserOptions {
     /// Whether `<<` merge keys are expanded in mappings. Defaults to `true` regardless of
     /// `yaml_version`, matching common tooling rather than strict 1.2 semantics.
     pub merge_keys: bool,
-    /// Reserved for future strict version-ambiguity diagnostics.
+    /// When `true` and `yaml_version` is `None` (no explicit pin, and no `%YAML` directive in
+    /// the source), refuses any plain scalar that resolves to a different value under YAML 1.1
+    /// than under 1.2 with an `ErrorKind::AmbiguousVersion` error instead of silently picking
+    /// one interpretation (`current_doc_version`, which defaults to 1.2). Has no effect when a
+    /// version is pinned, since there's no ambiguity to detect. Defaults to `false`.
     pub strict_version: bool,
 }
 
@@ -68,8 +72,11 @@ struct Parser<'a> {
     anchors: BTreeMap<String, NodeId>,
     current_doc_version: YamlVersion,
     version_explicit: bool,
+    /// Whether `current_doc_version` was pinned, either by `ParserOptions.yaml_version` or by a
+    /// `%YAML` directive — as opposed to just defaulting to 1.2. Used by `strict_version` to
+    /// know when there's no ambiguity to detect.
+    version_pinned: bool,
     merge_keys: bool,
-    #[allow(dead_code)]
     strict_version: bool,
     pending_trivia: Vec<Trivia>,
 }
@@ -87,6 +94,7 @@ impl<'a> Parser<'a> {
             anchors: BTreeMap::new(),
             current_doc_version: version,
             version_explicit: options.yaml_version.is_some(),
+            version_pinned: options.yaml_version.is_some(),
             merge_keys: options.merge_keys,
             strict_version: options.strict_version,
             pending_trivia: Vec::new(),
@@ -187,6 +195,7 @@ impl<'a> Parser<'a> {
                         if !self.version_explicit {
                             self.current_doc_version = version;
                             self.document.version = version;
+                            self.version_pinned = true;
                         }
                     }
                     Err(()) => {
@@ -276,7 +285,7 @@ impl<'a> Parser<'a> {
                 self.parse_block_mapping()
             }
             ParserToken::Scalar { raw, style, tag } => {
-                let value = self.resolve_scalar_value(raw, *style, tag.as_deref())?;
+                let value = self.resolve_scalar_value(raw, *style, tag.as_deref(), token.span)?;
                 let node = self.document.add_node(NodeData::new(
                     NodeId(0),
                     NodeKind::Scalar(Scalar {
@@ -437,7 +446,8 @@ impl<'a> Parser<'a> {
                     self.parse_value()?
                 }
                 ParserToken::Scalar { raw, style, tag } => {
-                    let value = self.resolve_scalar_value(raw, *style, tag.as_deref())?;
+                    let value =
+                        self.resolve_scalar_value(raw, *style, tag.as_deref(), token.span)?;
                     let key = self.document.add_node(NodeData::new(
                         NodeId(0),
                         NodeKind::Scalar(Scalar {
@@ -620,7 +630,7 @@ impl<'a> Parser<'a> {
 
         match &token.token {
             ParserToken::Scalar { raw, style, tag } => {
-                let value = self.resolve_scalar_value(raw, *style, tag.as_deref())?;
+                let value = self.resolve_scalar_value(raw, *style, tag.as_deref(), token.span)?;
                 let node = self.document.add_node(NodeData::new(
                     NodeId(0),
                     NodeKind::Scalar(Scalar {
@@ -677,15 +687,37 @@ impl<'a> Parser<'a> {
         raw: &str,
         style: ScalarStyle,
         tag: Option<&str>,
+        span: Span,
     ) -> Result<ScalarValue, YamlError> {
         if tag == Some("!str") {
             return Ok(ScalarValue::String(raw.to_string()));
         }
-        if style == ScalarStyle::Plain {
-            Ok(crate::resolve::resolve_scalar(raw, self.current_doc_version))
-        } else {
-            Ok(ScalarValue::String(raw.to_string()))
+        if style != ScalarStyle::Plain {
+            return Ok(ScalarValue::String(raw.to_string()));
         }
+        if self.strict_version && !self.version_pinned {
+            self.check_version_ambiguity(raw, span)?;
+        }
+        Ok(crate::resolve::resolve_scalar(raw, self.current_doc_version))
+    }
+
+    /// With `ParserOptions.strict_version` set and no explicit `yaml_version`/`%YAML` pin, a
+    /// plain scalar that resolves to a different value under YAML 1.1 than under 1.2 (the
+    /// "Norway problem" family: `yes`/`no`/`on`/`off` booleans, bare-octal `0755`, sexagesimal
+    /// `1:20:30`, ...) is refused rather than silently picking one interpretation.
+    fn check_version_ambiguity(&self, raw: &str, span: Span) -> Result<(), YamlError> {
+        let under_1_1 = crate::resolve::resolve_scalar(raw, YamlVersion::Version11);
+        let under_1_2 = crate::resolve::resolve_scalar(raw, YamlVersion::Version12);
+        if under_1_1 != under_1_2 {
+            return Err(self.error_at_offset(
+                span.start,
+                ErrorKind::AmbiguousVersion,
+                "resolves differently under YAML 1.1 vs 1.2; pin a version with a '%YAML' \
+                 directive or ParserOptions::yaml_version, or quote the scalar to force it to a \
+                 string",
+            ));
+        }
+        Ok(())
     }
 
     fn is_merge_key(&self, id: NodeId) -> bool {
@@ -1104,6 +1136,70 @@ mod tests {
                     other => panic!("expected mapping, got {other:?}"),
                 }
             }
+            other => panic!("expected mapping, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn strict_version_rejects_a_1_1_vs_1_2_ambiguous_scalar() {
+        let options = ParserOptions { strict_version: true, ..ParserOptions::default() };
+        // "yes" is Bool(true) under 1.1's Norway-problem table but String("yes") under 1.2.
+        let err = parse("a: yes\n", &options).unwrap_err();
+        assert_eq!(err.kind, ErrorKind::AmbiguousVersion);
+    }
+
+    #[test]
+    fn strict_version_accepts_an_unambiguous_scalar() {
+        let options = ParserOptions { strict_version: true, ..ParserOptions::default() };
+        // "true"/"false" resolve identically under both versions.
+        let doc = parse("a: true\nb: 42\nc: hello\n", &options).unwrap();
+        assert_eq!(doc.documents.len(), 1);
+    }
+
+    #[test]
+    fn strict_version_is_inert_without_the_flag() {
+        // Same ambiguous scalar as above, but the default (non-strict) parser just picks 1.2.
+        let doc = parse_simple("a: yes\n");
+        match root_kind(&doc) {
+            NodeKind::Mapping(entries) => {
+                let value = &doc.node(entries[0].1).unwrap().kind;
+                match value {
+                    NodeKind::Scalar(s) => assert_eq!(s.value, ScalarValue::String("yes".into())),
+                    other => panic!("expected scalar, got {other:?}"),
+                }
+            }
+            other => panic!("expected mapping, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn strict_version_is_inert_when_a_version_is_pinned() {
+        let options = ParserOptions {
+            strict_version: true,
+            yaml_version: Some(YamlVersion::Version11),
+            ..ParserOptions::default()
+        };
+        // Ambiguous between 1.1 and 1.2, but an explicit pin removes the ambiguity outright.
+        let doc = parse("a: yes\n", &options).unwrap();
+        match root_kind(&doc) {
+            NodeKind::Mapping(entries) => match &doc.node(entries[0].1).unwrap().kind {
+                NodeKind::Scalar(s) => assert_eq!(s.value, ScalarValue::Bool(true)),
+                other => panic!("expected scalar, got {other:?}"),
+            },
+            other => panic!("expected mapping, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn strict_version_is_inert_when_a_yaml_directive_pins_the_version() {
+        let options = ParserOptions { strict_version: true, ..ParserOptions::default() };
+        // The `%YAML 1.1` directive pins the version for this document, so `yes` is unambiguous.
+        let doc = parse("%YAML 1.1\n---\na: yes\n", &options).unwrap();
+        match root_kind(&doc) {
+            NodeKind::Mapping(entries) => match &doc.node(entries[0].1).unwrap().kind {
+                NodeKind::Scalar(s) => assert_eq!(s.value, ScalarValue::Bool(true)),
+                other => panic!("expected scalar, got {other:?}"),
+            },
             other => panic!("expected mapping, got {other:?}"),
         }
     }

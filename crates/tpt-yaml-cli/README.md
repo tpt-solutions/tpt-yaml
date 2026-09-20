@@ -48,9 +48,12 @@ Flags:
 - `--schema <FILE>` — validate against this schema (YAML).
 - `--yaml-version 1.1|1.2|auto` — force implicit-scalar resolution under a specific YAML
   version; `auto` (the default) honors a `%YAML` directive in the file, falling back to 1.2.
-- `--strict-version` — reserved for future YAML-version-ambiguity diagnostics. The flag is
-  wired through to `tpt_yaml_core::ParserOptions::strict_version`, but that hook is not yet
-  implemented upstream in `tpt-yaml-core`, so passing it currently has no observable effect.
+- `--strict-version` — without an explicit `--yaml-version` or a `%YAML` directive in the file,
+  rejects any plain scalar that would resolve to a different value under YAML 1.1 than under 1.2
+  (e.g. `0755` — octal under 1.1, a string under 1.2 without the `0o` prefix; `yes`/`no`/`on`/
+  `off` — booleans under 1.1, strings under 1.2) instead of silently picking 1.2's
+  interpretation. A `%YAML` directive or an explicit `--yaml-version` removes the ambiguity
+  outright, so this flag has no effect in either case.
 
 ### `fmt <FILE>...`
 
@@ -108,9 +111,6 @@ whitespace/comment/formatting changes the structural diff ignores).
 
 ## Known limitations
 
-- `--strict-version` is accepted and threaded through to `ParserOptions`, but the underlying
-  ambiguity-detection behavior in `tpt-yaml-core` isn't implemented yet (see that crate's
-  `todo.md` entry) — passing it is a no-op today.
 - `convert --to json` only converts the first document of a multi-document YAML stream (JSON
   has no multi-document concept); `fmt`/`convert --to yaml` render every document, separated by
   `---`.

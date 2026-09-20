@@ -63,8 +63,10 @@ SUBCOMMANDS:
                                     document loaded from FILE (YAML).
         --yaml-version <V>         Force resolution under 1.1, 1.2, or auto (default: auto —
                                     honor a %YAML directive, else 1.2).
-        --strict-version           Reserved for future ambiguity diagnostics; currently just
-                                    wires the flag through (no behavior yet).
+        --strict-version           Without an explicit --yaml-version or a %YAML directive,
+                                    reject any plain scalar that would resolve differently under
+                                    YAML 1.1 than under 1.2 (e.g. 0755, yes/no) instead of
+                                    silently picking 1.2's interpretation.
 
     fmt <FILE>...
         Re-render each FILE through the canonical pretty-printer.

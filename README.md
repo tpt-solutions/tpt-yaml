@@ -1,5 +1,9 @@
 # tpt-yaml
 
+[![CI](https://github.com/tpt-solutions/tpt-yaml/actions/workflows/ci.yml/badge.svg)](https://github.com/tpt-solutions/tpt-yaml/actions/workflows/ci.yml)
+[![MSRV](https://img.shields.io/badge/MSRV-1.75-blue)](https://github.com/tpt-solutions/tpt-yaml/blob/master/Cargo.toml)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#license)
+
 A dependency-light YAML toolkit for Rust, split into small crates so you only
 pay for what you use. No dependency on any `tpt-io-*` crate — this family is
 standalone.
@@ -24,6 +28,16 @@ release-readiness status and publish order.
 ```rust
 let doc = tpt_yaml_core::parse("key: value\nlist:\n  - a\n  - b\n")?;
 let root = doc.root().unwrap();
+```
+
+Or process a document as a constant-memory stream of events, without
+building the arena at all:
+
+```rust
+let mut parser = tpt_yaml_core::stream::events("key: value\nlist:\n  - a\n  - b\n");
+while let Some(event) = parser.next_event()? {
+    // handle Event::MappingStart, Event::Scalar, Event::SequenceEnd, ...
+}
 ```
 
 ## Status

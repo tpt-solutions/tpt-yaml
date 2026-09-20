@@ -111,8 +111,8 @@ by the streaming path rather than supported, since replaying an alias
 requires buffering the anchored subtree's events, which would silently
 reintroduce the O(document size) memory use streaming exists to avoid —
 documents with anchors should keep using `tpt_yaml_serde::from_str`. Other
-§8 items (`--strict-version`, conformance corpus, fuzz runs, benches,
-examples, `CONTRIBUTING.md`, etc.) are still outstanding.
+§8 items (conformance corpus, fuzz runs, benches, examples,
+`CONTRIBUTING.md`, etc.) are still outstanding.
 
 **Update (2026-09-20, continued):** wired up the FFI header CI job and, while
 doing so, found that the *existing* `msrv`/`clippy` CI jobs would not
@@ -163,6 +163,31 @@ GitHub Actions execution is still unverified (no push done from this
 session) — that's the one piece of the "not yet run in real CI" status this
 update doesn't close.
 
+**Update (2026-09-20, continued further):** implemented `ParserOptions.
+strict_version` / CLI `--strict-version` (§1/§5/§8), previously wired
+end-to-end but inert. When set and the version wasn't pinned (no explicit
+`ParserOptions.yaml_version`, no `%YAML` directive), every plain scalar is
+now resolved under both YAML 1.1 and 1.2 and rejected with a new
+`ErrorKind::AmbiguousVersion` if the two disagree (`0755`, `yes`/`no`/`on`/
+`off`, ...). Implemented in both `tpt-yaml-core::parser::Parser` and
+`stream::EventParser` — the latter needed its own `version_pinned` tracking
+fix (mirroring the arena parser's pre-existing gap where `%YAML`-directive
+pinning wasn't distinguished from "just defaulted to 1.2") and a signature
+change (`resolve` went from infallible to `Result`-returning). Finding good
+test cases for this surfaced a real, independent bug: `resolve.rs`'s YAML
+1.1 boolean table was missing `true`/`True`/`TRUE`/`false`/`False`/`FALSE`
+outright (only 1.2's branch had them) — the real YAML 1.1 core schema
+includes `true`/`false` *alongside* `yes`/`no`/`on`/`off`, not instead of
+them, so this made `true` silently resolve to `String("true")` under 1.1
+instead of `Bool(true)`, and would have made `--strict-version` flag the
+single most common YAML boolean spelling as "ambiguous" for every 1.1-mode
+document. Fixed. Covered by 8 new unit tests (4 in `parser.rs`, 4 in
+`stream.rs`: rejects an ambiguous scalar, accepts an unambiguous one, inert
+without the flag, inert when a version is pinned via option or via
+directive). `cargo test --workspace --all-features` and
+`cargo clippy --workspace --all-targets [--all-features] -- -D warnings`
+both clean after this change.
+
 ---
 
 ## 0. Workspace-level
@@ -192,10 +217,10 @@ update doesn't close.
 - [x] Comment/blank-line trivia attachment — populated via `Parser::skip_trivia`/`attach_trivia`
 - [x] Span tracking (`span: Option<Span>`) — populated on every node the parser creates
 - [x] `YamlVersion`-parameterized `resolve.rs`: bool/int/float/null/timestamp tag-resolution tables; fixed three real bugs: quoted/block scalars (e.g. `"true"`, `'42'`) were being implicit-tag-resolved like plain scalars (only plain scalars undergo implicit resolution now); `+42` was resolving to `-42` (any sign prefix triggered negation, not just `-`); `-9223372036854775808` (`i64::MIN`) silently fell back to `Float` since its magnitude (`2^63`) doesn't fit in `i64` as a positive number for the `try_from` check to pass
-- [x] Norway-problem boolean table (1.1 `y/n/on/off/...` vs. 1.2 `true/false` only)
+- [x] Norway-problem boolean table (1.1 `y/n/on/off/yes/no/true/false/...` — a strict superset of 1.2's `true/false` only). Fixed a real bug found while implementing `strict_version` below: the 1.1 branch was missing `true`/`True`/`TRUE`/`false`/`False`/`FALSE` entirely (only 1.2's branch had them), so under 1.1 `true` resolved to `String("true")` instead of `Bool(true)` — the real YAML 1.1 core schema includes `true`/`false` alongside `yes`/`no`/`on`/`off`, it doesn't exclude them. This was silently wrong for any 1.1 document using `true`/`false`, and would have made `strict_version` (below) flag the single most common YAML boolean spelling as "ambiguous" for no reason
 - [x] Octal sigil handling (1.1 bare `0755` vs. 1.2 `0o755`)
 - [x] Sexagesimal ints/floats (1.1-only, e.g. `1:20:30` → `Int(4830)`, `1:20:30.5` → `Float`) — distinct int vs. float paths, gated to `YamlVersion::Version11` only (1.2 no longer misparses colon-containing strings)
-- [~] `document.version()` always reports resolved version — now updated from a `%YAML` directive when present (unless `ParserOptions.yaml_version` was explicit); the `--strict-version` ambiguity-detection hook itself is still unimplemented (`ParserOptions.strict_version` field exists but is inert)
+- [x] `document.version()` always reports resolved version — updated from a `%YAML` directive when present (unless `ParserOptions.yaml_version` was explicit). `--strict-version` ambiguity detection is now implemented too (previously inert): when `strict_version` is set and the version wasn't pinned (no explicit `ParserOptions.yaml_version`, no `%YAML` directive — tracked by a new `version_pinned` field, since the pre-existing `version_explicit` field only covered the option, not the directive), every plain scalar is resolved under both 1.1 and 1.2 and rejected with the new `ErrorKind::AmbiguousVersion` if they disagree (e.g. `0755`, `yes`/`no`). Implemented identically in both `parser::Parser` and `stream::EventParser` (the latter needed the same `version_pinned` fix, and `resolve`'s signature changed from `-> ScalarValue` to `-> Result<ScalarValue, YamlError>`). Covered by dedicated unit tests in both modules (rejects an ambiguous scalar, accepts an unambiguous one, inert without the flag, inert when a version is pinned via option or directive)
 - [x] Shared pretty-printer function for synthesized subtrees — drafted in `node.rs` (`pretty_print`/`render_node`/`render_scalar`), compiles and works. Fixed two real bugs found while round-trip-testing `tpt-yaml-serde`: an empty mapping/sequence rendered as nothing at all in block style (silently becoming `null` on re-parse) — now rendered as flow `{}`/`[]`; an alias used as a mapping value or sequence item rendered as the literal text `null` instead of `*anchor_name` (only the top-level-node case handled aliases)
 - [x] Unit tests for lexer/parser edge cases — 24 tests in `tpt-yaml-core` covering implicit/explicit mappings, nested block structures, flow collections, anchors/aliases, merge keys, multi-doc streams, sexagesimal, quoted-scalar type safety, trailing-content errors
 - [x] Golden fixtures in `tests/samples/*.yaml` (block/flow styles, anchors/aliases, merge keys, comments in every syntactic position); `tests/golden.rs` asserts every fixture parses and re-renders without panicking. Multi-doc streams are covered by `multi_doc.yaml` but not yet cross-checked against `tests/samples/*.yaml` from a *second* independent implementation — this is a smoke test, not a byte-exact golden-output check (no `.expected` files yet)
@@ -244,7 +269,7 @@ update doesn't close.
 ## 5. `tpt-yaml-cli`
 
 - [x] `Cargo.toml`: **std-only** dependency wiring (`serde_json`, `tpt-yaml-core`/`-edit`/`-schema`/`-serde` path deps); hand-rolled arg parser (no `clap`) implemented in `src/main.rs`
-- [x] `check <FILE>...` subcommand (`--schema <FILE>`, `--yaml-version 1.1|1.2|auto`, `--strict-version` — wired through to `ParserOptions.strict_version` but inert until the ambiguity-detection hook itself lands in `tpt-yaml-core`, per §1)
+- [x] `check <FILE>...` subcommand (`--schema <FILE>`, `--yaml-version 1.1|1.2|auto`, `--strict-version` — now a real ambiguity-detection check, not just wired through, per §1)
 - [x] `fmt <FILE>...` subcommand (`--check`, `--write`, defaults to stdout)
 - [x] `convert <FILE> --to json|yaml [-o <FILE>]` subcommand (hand-written `tpt_yaml_serde::Value` → `serde_json::Value` mapper)
 - [x] `diff <A> <B>` subcommand (structural diff by default, recursive tree walk via `tpt-yaml-edit`'s `Path`/`Key`, alias-dereferencing; `--text` for a small LCS-based line diff)
@@ -301,9 +326,10 @@ opportunities. Not yet started unless marked otherwise.
       constant-memory decode) or remove the feature flag until it's real — done,
       see §2/§1 for the `EventParser`/`stream::Deserializer` implementation and
       its test coverage
-- [ ] Implement `ParserOptions.strict_version` / CLI `--strict-version` YAML
-      1.1-vs-1.2 ambiguity detection, or remove the flag — currently wired
-      end-to-end but inert (§1/§5 gap, restated here as an actionable item)
+- [x] Implement `ParserOptions.strict_version` / CLI `--strict-version` YAML
+      1.1-vs-1.2 ambiguity detection, or remove the flag — done, see §1/§5;
+      along the way, fixed a real pre-existing bug where the 1.1 boolean
+      table was missing `true`/`false` entirely
 - [ ] Actually fetch and run the `yaml-test-suite` conformance corpus against
       `tpt-yaml-core`'s harness at least once, and fix whatever it finds —
       never run against the real corpus so far, only smoke-tested locally

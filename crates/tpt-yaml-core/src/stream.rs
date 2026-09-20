@@ -246,7 +246,12 @@ pub struct EventParser<'a> {
     anchors: BTreeSet<String>,
     version: YamlVersion,
     version_explicit: bool,
+    /// Whether `version` was pinned, either by `ParserOptions.yaml_version` or by a `%YAML`
+    /// directive — as opposed to just defaulting to 1.2. Mirrors `crate::parser::Parser`'s field
+    /// of the same name; used by `strict_version` to know when there's no ambiguity to detect.
+    version_pinned: bool,
     merge_keys: bool,
+    strict_version: bool,
     finished: bool,
 }
 
@@ -264,7 +269,9 @@ impl<'a> EventParser<'a> {
             anchors: BTreeSet::new(),
             version: options.yaml_version.unwrap_or(YamlVersion::Version12),
             version_explicit: options.yaml_version.is_some(),
+            version_pinned: options.yaml_version.is_some(),
             merge_keys: options.merge_keys,
+            strict_version: options.strict_version,
             finished: false,
         }
     }
@@ -514,6 +521,7 @@ impl EventParser<'_> {
                     Ok(version) => {
                         if !self.version_explicit {
                             self.version = version;
+                            self.version_pinned = true;
                         }
                     }
                     Err(()) => {
@@ -631,7 +639,7 @@ impl EventParser<'_> {
             }
             TokenKind::Scalar { raw, style, .. } => {
                 self.reject_merge_key(raw, span)?;
-                let value = self.resolve(raw, *style);
+                let value = self.resolve(raw, *style, span)?;
                 self.register_anchors(pending_anchors)?;
                 self.pop()?;
                 self.outbox.push_back(Event::Scalar(ScalarEvent {
@@ -955,7 +963,7 @@ impl EventParser<'_> {
                         unreachable!("class checked above")
                     };
                     self.reject_merge_key(raw, token.span)?;
-                    let value = self.resolve(raw, *style);
+                    let value = self.resolve(raw, *style, token.span)?;
                     self.pop()?;
                     if let (Some(name), Some(span)) = (&anchor, anchor_span) {
                         self.register_anchors(alloc::vec![(name.clone(), span)])?;
@@ -988,7 +996,7 @@ impl EventParser<'_> {
             return Ok(());
         };
         self.reject_merge_key(raw, token.span)?;
-        let value = self.resolve(raw, *style);
+        let value = self.resolve(raw, *style, token.span)?;
         self.outbox.push_back(Event::Scalar(ScalarEvent {
             value,
             style: convert_style(*style),
@@ -1005,12 +1013,37 @@ impl EventParser<'_> {
 impl EventParser<'_> {
     /// Implicit tag resolution, matching the arena parser: only plain scalars type-resolve, and
     /// quoted/block scalars are always strings.
-    fn resolve(&self, raw: &str, style: LexScalarStyle) -> ScalarValue {
-        if style == LexScalarStyle::Plain {
-            crate::resolve::resolve_scalar(raw, self.version)
-        } else {
-            ScalarValue::String(String::from(raw))
+    fn resolve(
+        &self,
+        raw: &str,
+        style: LexScalarStyle,
+        span: Span,
+    ) -> Result<ScalarValue, YamlError> {
+        if style != LexScalarStyle::Plain {
+            return Ok(ScalarValue::String(String::from(raw)));
         }
+        if self.strict_version && !self.version_pinned {
+            self.check_version_ambiguity(raw, span)?;
+        }
+        Ok(crate::resolve::resolve_scalar(raw, self.version))
+    }
+
+    /// See `crate::parser::Parser::check_version_ambiguity` — same check, same rationale,
+    /// duplicated here because this parser tracks its own independent version/pinning state.
+    fn check_version_ambiguity(&self, raw: &str, span: Span) -> Result<(), YamlError> {
+        let under_1_1 = crate::resolve::resolve_scalar(raw, YamlVersion::Version11);
+        let under_1_2 = crate::resolve::resolve_scalar(raw, YamlVersion::Version12);
+        if under_1_1 != under_1_2 {
+            return Err(YamlError::new(
+                span.start,
+                ErrorKind::AmbiguousVersion,
+                "resolves differently under YAML 1.1 vs 1.2; pin a version with a '%YAML' \
+                 directive or ParserOptions::yaml_version, or quote the scalar to force it to a \
+                 string",
+                self.source,
+            ));
+        }
+        Ok(())
     }
 
     /// Merge keys need the anchored mapping's entries replayed, which a single-pass event stream
@@ -1186,6 +1219,47 @@ mod tests {
         // `<<` itself is no longer rejected outright before that alias lookup fails.
         let err = result.unwrap_err();
         assert_eq!(err.kind, ErrorKind::UnknownAnchor);
+    }
+
+    #[test]
+    fn strict_version_rejects_a_1_1_vs_1_2_ambiguous_scalar() {
+        let options = ParserOptions { strict_version: true, ..ParserOptions::default() };
+        // Bare-octal `0755` is Int(493) under 1.1 but String("0755") under 1.2 (1.2 requires the
+        // `0o` prefix for octal).
+        let err = collect_events_with_options("a: 0755\n", &options).unwrap_err();
+        assert_eq!(err.kind, ErrorKind::AmbiguousVersion);
+    }
+
+    #[test]
+    fn strict_version_accepts_an_unambiguous_scalar() {
+        let options = ParserOptions { strict_version: true, ..ParserOptions::default() };
+        let events = collect_events_with_options("a: true\nb: 42\n", &options).unwrap();
+        assert!(!events.is_empty());
+    }
+
+    #[test]
+    fn strict_version_is_inert_when_a_version_is_pinned() {
+        let options = ParserOptions {
+            strict_version: true,
+            yaml_version: Some(YamlVersion::Version11),
+            ..ParserOptions::default()
+        };
+        let events = collect_events_with_options("a: 0755\n", &options).unwrap();
+        assert!(!events.is_empty());
+    }
+
+    #[test]
+    fn strict_version_is_inert_when_a_yaml_directive_pins_the_version() {
+        let options = ParserOptions { strict_version: true, ..ParserOptions::default() };
+        let events = collect_events_with_options("%YAML 1.1\n---\na: 0755\n", &options).unwrap();
+        assert!(!events.is_empty());
+    }
+
+    fn collect_events_with_options(
+        source: &str,
+        options: &ParserOptions,
+    ) -> Result<Vec<Event>, YamlError> {
+        events_with_options(source, options).collect()
     }
 
     #[test]

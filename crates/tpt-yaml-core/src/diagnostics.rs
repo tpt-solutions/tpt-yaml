@@ -16,6 +16,7 @@ pub enum ErrorKind {
     InvalidTag,
     InvalidMergeKey,
     TrailingContent,
+    AmbiguousVersion,
     Other,
 }
 
@@ -34,6 +35,7 @@ impl fmt::Display for ErrorKind {
             Self::InvalidTag => "invalid tag",
             Self::InvalidMergeKey => "invalid merge key",
             Self::TrailingContent => "trailing content",
+            Self::AmbiguousVersion => "scalar resolves differently under YAML 1.1 vs 1.2",
             Self::Other => "invalid YAML",
         };
         f.write_str(value)

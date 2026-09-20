@@ -32,10 +32,13 @@ subtree via [`pretty_print`].
 - **Source spans** on every node the parser creates, for editor/diagnostic tooling built on top
   (see [`tpt-yaml-edit`](../tpt-yaml-edit) and [`tpt-yaml-schema`](../tpt-yaml-schema)).
 - **YAML 1.1 vs. 1.2 implicit-scalar resolution** ([`YamlVersion`], via `resolve.rs`): the
-  "Norway problem" boolean table (1.1 `y`/`n`/`on`/`off`/... vs. 1.2 `true`/`false` only), octal
-  sigils (1.1 bare `0755` vs. 1.2 `0o755`), and 1.1-only sexagesimal ints/floats
-  (`1:20:30` → `Int(4830)`). [`ParserOptions::yaml_version`] forces a version; leaving it `None`
-  auto-detects from a `%YAML` directive, defaulting to 1.2.
+  "Norway problem" boolean table (1.1's `y`/`n`/`on`/`off`/`yes`/`no`/... is a strict superset of
+  1.2's `true`/`false`-only set), octal sigils (1.1 bare `0755` vs. 1.2 `0o755`), and 1.1-only
+  sexagesimal ints/floats (`1:20:30` → `Int(4830)`). [`ParserOptions::yaml_version`] forces a
+  version; leaving it `None` auto-detects from a `%YAML` directive, defaulting to 1.2.
+  [`ParserOptions::strict_version`] refuses (`ErrorKind::AmbiguousVersion`) any plain scalar that
+  would resolve differently under the two versions when no version was pinned either way,
+  instead of silently picking 1.2's interpretation.
 
 ## Design
 
@@ -54,9 +57,6 @@ subtree via [`pretty_print`].
 
 ## Known limitations
 
-- `ParserOptions::strict_version` is a reserved field with no behavior yet: `document.version()`
-  reports the resolved version (honoring a `%YAML` directive), but there is no ambiguity
-  diagnostic when a document mixes version-specific syntax without a directive.
 - The `yaml-test-suite` conformance harness (`tests/conformance.rs`) exists but is `#[ignore]`d
   and gated on a gitignored corpus directory — it has not yet been run against the real upstream
   corpus in this environment.
