@@ -188,6 +188,34 @@ directive). `cargo test --workspace --all-features` and
 `cargo clippy --workspace --all-targets [--all-features] -- -D warnings`
 both clean after this change.
 
+**Update (2026-09-23):** the first *real* GitHub Actions run failed in the
+`msrv` job: Cargo 1.75 can't even parse `encoding_rs` 0.8.41's manifest
+(`edition2024` requires Cargo ≥1.85). Root cause was the same class as the
+2026-09-20 tempfile/proptest breakage — the workspace `Cargo.lock` had last
+been resolved under a modern stable toolchain when the benches commit landed
+(`criterion`/`yaml-rust2` dev-deps), and several *transitive* deps of
+`criterion` (clap, rayon, half), `serde_yaml` (indexmap), and `yaml-rust2`
+(encoding_rs) had each released post-1.75 versions; `encoding_rs` was simply
+the first one the downloader hit. Fixed by precise downgrades in `Cargo.lock`
+only (each the newest release whose manifest is edition ≤2021 +
+rust-version ≤1.75 while still satisfying the parent's version req):
+`encoding_rs` 0.8.41→0.8.35 (also drops `core_detect`/`multiversion*`/
+`scopeguard`/`simdutf8`), `clap`/`clap_builder` 4.6.7→4.5.61, `clap_lex`
+1.1.1→1.0.1 (clap_builder 4.5 requires `clap_lex ^1.0`, and only 1.0.x is
+still 1.75-parseable — 1.1.x went edition2024), `rayon` 1.12→1.10.0,
+`rayon-core` 1.13→1.12.1, `half` 2.7.1→2.4.1, `indexmap` 2.14.2→2.11.4
+(`hashbrown` 0.17.1 removed; 0.16.1 remains as the single copy). Two
+manifest-flagged groups are intentionally left alone as out-of-msrv-scope:
+the `toml*`/`serde_spanned` chain (only reachable via `cbindgen`, which the
+msrv job skips with `--no-default-features`) and the wasm/wasi-target crates
+(`wasm-bindgen*`/`js-sys`/`web-sys`/`wit-bindgen`/`wasip2`, never built on
+the CI runner's x86_64 Linux). All four msrv-job commands verified green
+under `rustup run 1.75.0` locally, plus the full stable matrix
+(fmt/clippy×2/test×2/ffi-header). Note these pins live only in `Cargo.lock`
+(they're transitive — no `Cargo.toml` req to cap, same situation as the
+`tempfile` pin), so a bare `cargo update` will silently re-break the `msrv`
+job the same way.
+
 ---
 
 ## 0. Workspace-level
