@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<!--
+  Basic browser usage of the `tpt-yaml-wasm` bindings.
+
+  Build the package first (from the repo root):
+
+      wasm-pack build --target web crates/tpt-yaml-wasm
+
+  That produces a `pkg/` directory next to `crates/tpt-yaml-wasm/Cargo.toml`. Then serve this
+  file from `crates/tpt-yaml-wasm/examples/` with any static file server (opening it directly
+  via `file://` won't work — `fetch`-based .wasm loading requires http(s)), e.g.:
+
+      cd crates/tpt-yaml-wasm
+      python -m http.server 8000
+      # then open http://localhost:8000/examples/basic.html
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>tpt-yaml-wasm basic example</title>
+</head>
+<body>
+  <h1>tpt-yaml-wasm basic example</h1>
+  <pre id="output">loading…</pre>
+
+  <script type="module">
+    import init, { parse, toJson, stringify } from "../pkg/tpt_yaml_wasm.js";
+
+    async function main() {
+      await init();
+
+      const lines = [];
+
+      // parse: YAML text -> native JS value
+      const value = parse("name: Ada\ncount: 3\ntags: [a, b]\n");
+      lines.push("parse() -> " + JSON.stringify(value));
+
+      // toJson: YAML text -> JSON string
+      const json = toJson("name: Ada\ncount: 3\n");
+      lines.push("toJson() -> " + json);
+
+      // stringify: native JS value -> YAML text
+      const yaml = stringify({ name: "Ada", count: 3, tags: ["a", "b"] });
+      lines.push("stringify() ->\n" + yaml);
+
+      // error handling: parse throws a JS Error on malformed YAML
+      try {
+        parse("key: [1, 2");
+        lines.push("expected parse() to throw on malformed YAML");
+      } catch (err) {
+        lines.push("parse failed as expected: " + err.message);
+      }
+
+      document.getElementById("output").textContent = lines.join("\n\n");
+    }
+
+    main().catch((err) => {
+      document.getElementById("output").textContent = "error: " + err;
+      throw err;
+    });
+  </script>
+</body>
+</html>

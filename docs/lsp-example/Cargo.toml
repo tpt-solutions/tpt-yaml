@@ -1,0 +1,16 @@
+[package]
+name = "lsp-example"
+version = "0.1.0"
+edition = "2021"
+
+# Path dependencies for use against a local clone.
+# After the v0.1.0 crates.io release these can be replaced with:
+#   tpt-yaml-core   = "0.1"
+#   tpt-yaml-schema = "0.1"
+# Empty table tells Cargo this is a standalone project, not a member of the
+# parent workspace at the repo root.
+[workspace]
+
+[dependencies]
+tpt-yaml-core   = { path = "../../crates/tpt-yaml-core" }
+tpt-yaml-schema = { path = "../../crates/tpt-yaml-schema" }

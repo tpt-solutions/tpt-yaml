@@ -16,7 +16,18 @@ std = []
 alloc = []
 
 [dev-dependencies]
+# criterion 0.5.1 is the newest release that still supports this workspace's 1.75 MSRV
+# (criterion 0.6+ requires rustc 1.80+, 0.8 requires 1.86); `cargo add` already refused the
+# newer ones, pin so `cargo update` can't silently pick them back up.
+criterion = { version = "=0.5.1", features = ["html_reports"] }
 # Capped below 1.9: proptest 1.9+ requires rustc 1.82, past this workspace's MSRV (1.75, see
 # AGENTS.md); `cargo update` would otherwise silently pick a version that breaks the `msrv` CI
 # job. 1.8 is the newest release that still supports 1.75.
 proptest = ">=1, <1.9"
+# Head-to-head baseline for benches/parse.rs. yaml-rust2 (actively maintained fork of the
+# unmaintained yaml-rust) 0.13+ requires rustc 1.85; 0.11.1 is the newest release within MSRV.
+yaml-rust2 = "=0.11.1"
+
+[[bench]]
+name = "parse"
+harness = false

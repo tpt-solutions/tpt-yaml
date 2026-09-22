@@ -50,12 +50,13 @@ fuzz_target!(|data: &[u8]| {
                         let _ = unsafe {
                             tpt_yaml_mapping_get(doc, root, key.as_ptr(), key.len(), &mut out_node)
                         };
+                        let absent_key = b"__definitely_absent_key__";
                         let _ = unsafe {
                             tpt_yaml_mapping_get(
                                 doc,
                                 root,
-                                b"__definitely_absent_key__".as_ptr(),
-                                26,
+                                absent_key.as_ptr(),
+                                absent_key.len(),
                                 &mut out_node,
                             )
                         };

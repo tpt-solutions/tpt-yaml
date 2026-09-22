@@ -157,11 +157,38 @@ impl Document {
 /// Render a node in canonical block YAML.
 pub fn pretty_print(root: NodeId, document: &Document) -> String {
     let mut output = String::new();
+    if let Some(node) = document.node(root) {
+        render_trivia(&node.trivia, 0, &mut output);
+    }
     render_node(root, document, 0, &mut output);
     if !output.ends_with('\n') {
         output.push('\n');
     }
     output
+}
+
+/// Renders a node's own leading trivia (comments/blank lines that appeared immediately before it
+/// in the source) at `indent`. Comment text is stored without its leading `#` (see
+/// `lexer::TokenKind::Comment`), so it's re-added here; an empty comment (`#` alone) is rendered
+/// without a trailing space.
+pub fn render_trivia(trivia: &[Trivia], indent: usize, output: &mut String) {
+    let prefix = " ".repeat(indent);
+    for item in trivia {
+        match &item.kind {
+            TriviaKind::Comment(text) => {
+                output.push_str(&prefix);
+                output.push('#');
+                if !text.is_empty() {
+                    output.push(' ');
+                    output.push_str(text);
+                }
+                output.push('\n');
+            }
+            TriviaKind::BlankLine => {
+                output.push('\n');
+            }
+        }
+    }
 }
 
 fn render_node(id: NodeId, document: &Document, indent: usize, output: &mut String) {
@@ -195,6 +222,12 @@ fn render_node(id: NodeId, document: &Document, indent: usize, output: &mut Stri
                 return;
             }
             for (key_id, value_id) in entries {
+                if let Some(key_node) = document.node(*key_id) {
+                    render_trivia(&key_node.trivia, indent, output);
+                }
+                if let Some(value_node) = document.node(*value_id) {
+                    render_trivia(&value_node.trivia, indent, output);
+                }
                 let key = document
                     .node(*key_id)
                     .and_then(|key| match &key.kind {
@@ -221,6 +254,9 @@ fn render_node(id: NodeId, document: &Document, indent: usize, output: &mut Stri
                     output.push('\n');
                 }
             }
+            // Trivia attached to the container itself: a trailing comment/blank line after the
+            // last entry with no specific entry of its own to attach to.
+            render_trivia(&node.trivia, indent, output);
         }
         NodeKind::Sequence(items) => {
             if items.is_empty() {
@@ -232,6 +268,7 @@ fn render_node(id: NodeId, document: &Document, indent: usize, output: &mut Stri
                 let Some(item_node) = document.node(*item) else {
                     continue;
                 };
+                render_trivia(&item_node.trivia, indent, output);
                 if is_nonempty_collection(item_node) {
                     output.push_str(&prefix);
                     output.push('-');
@@ -244,6 +281,7 @@ fn render_node(id: NodeId, document: &Document, indent: usize, output: &mut Stri
                     output.push('\n');
                 }
             }
+            render_trivia(&node.trivia, indent, output);
         }
         NodeKind::Alias(alias) => {
             output.push_str(&prefix);

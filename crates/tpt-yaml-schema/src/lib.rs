@@ -3,20 +3,28 @@
 //! JSON (the `json-schema` feature), documents validate against the compiled IR, and every
 //! [`ValidationIssue`] carries the offending node's span for editor surfacing.
 //!
-//! Supported keywords: `type`, `enum`, `const`, `pattern`/`minLength`/`maxLength` (strings),
-//! `minimum`/`maximum`/`exclusiveMinimum`/`exclusiveMaximum`/`multipleOf` (numbers),
+//! Supported keywords: `type`, `enum`, `const`, `pattern`/`minLength`/`maxLength`/`format`
+//! (strings), `minimum`/`maximum`/`exclusiveMinimum`/`exclusiveMaximum`/`multipleOf` (numbers),
 //! `items`/`minItems`/`maxItems`/`uniqueItems` (arrays), `properties`/`required`/
 //! `additionalProperties`/`minProperties`/`maxProperties` (objects), `oneOf`/`anyOf`/`allOf`/
-//! `not`, and internal `$ref` (`#/$defs/<name>` or `#/<name>`).
+//! `not`, internal `$ref` (`#/$defs/<name>` or `#/<name>`), and external `$ref` (filesystem-only,
+//! via [`SchemaDocument::from_yaml_file`], the `std` feature). `format` validates a small subset
+//! (`email`, `date-time`, `date`, `uri`, `ipv4`, `ipv6`, `uuid` — see [`format`]); unrecognized
+//! `format` values are silently ignored, matching this crate's existing unknown-keyword
+//! convention.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
 extern crate alloc;
 
+pub mod format;
 pub mod pattern;
 
+#[cfg(feature = "std")]
+mod external;
+
 use alloc::collections::BTreeMap;
-use alloc::format;
+use alloc::format as fmt_macro;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::fmt;
@@ -118,6 +126,7 @@ pub enum Schema {
         min_length: Option<usize>,
         max_length: Option<usize>,
         pattern: Option<pattern::Pattern>,
+        format: Option<format::Format>,
     },
     Number {
         minimum: Option<f64>,
@@ -143,7 +152,9 @@ pub enum Schema {
     OneOf(Vec<Schema>),
     AnyOf(Vec<Schema>),
     AllOf(Vec<Schema>),
-    /// An internal reference: `#/$defs/<name>` or `#/<name>`.
+    /// A reference: an internal `#/$defs/<name>` / `#/<name>` (resolved against this document's
+    /// own `$defs`), or, once compiled via [`SchemaDocument::from_yaml_file`], a normalized key
+    /// naming an externally loaded schema — see `external.rs`.
     Ref(String),
 }
 
@@ -202,7 +213,9 @@ impl EnumValue {
     }
 }
 
-/// A loaded schema document: the compiled root schema plus any `$defs`.
+/// A loaded schema document: the compiled root schema plus any `$defs` (and, when loaded via
+/// [`SchemaDocument::from_yaml_file`], any externally referenced schemas, flattened in under
+/// namespaced keys — see `external.rs`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct SchemaDocument {
     pub root: Schema,
@@ -210,20 +223,39 @@ pub struct SchemaDocument {
 }
 
 impl SchemaDocument {
-    /// Loads a schema from YAML source, dogfooding [`tpt_yaml_core::parse`] for the parse.
+    /// Loads a schema from YAML source, dogfooding [`tpt_yaml_core::parse`] for the parse. `$ref`
+    /// is resolved internally only (`#/$defs/<name>` or `#/<name>`) — a `$ref` naming an external
+    /// file is a compile error here; use [`SchemaDocument::from_yaml_file`] (the `std` feature)
+    /// for external `$ref` support.
     pub fn from_yaml_str(source: &str) -> Result<Self, Error> {
         let document = tpt_yaml_core::parse(source)?;
         let root =
             document.root().ok_or_else(|| Error::InvalidSchema("empty document".to_string()))?;
-        let (root, defs) = compile_root(&document, root)?;
+        let (root, defs) = compile_root(&document, root, &mut NoExternal)?;
         Ok(Self { root, defs })
     }
 
-    /// Loads a schema from JSON source (the `json-schema` feature, backed by `serde_json`).
+    /// Loads a schema from a YAML file on disk (the `std` feature), resolving `$ref`s that name
+    /// another file — `other-schema.yaml#/$defs/foo`, `other-schema.yaml#/foo`, or a bare
+    /// `other-schema.yaml` referencing that file's root schema — relative to each file's own
+    /// directory, in addition to the usual internal `#/$defs/<name>` form. See the README's
+    /// "Known limitations" for exactly what this does and doesn't cover: filesystem paths only
+    /// (no HTTP(S)/`file://` URIs), no `$anchor`/base-URI tracking, and external files are
+    /// namespaced by their literal spelling as written in the referencing schema rather than by
+    /// canonical path (two different files reached via the same relative spelling from different
+    /// directories are not distinguished).
+    #[cfg(feature = "std")]
+    pub fn from_yaml_file(path: impl AsRef<std::path::Path>) -> Result<Self, Error> {
+        external::from_yaml_file(path.as_ref())
+    }
+
+    /// Loads a schema from JSON source (the `json-schema` feature, backed by `serde_json`). `$ref`
+    /// is internal-only, same as [`SchemaDocument::from_yaml_str`]; external `$ref` is not
+    /// supported for the JSON front-end.
     #[cfg(feature = "json-schema")]
     pub fn from_json_str(source: &str) -> Result<Self, Error> {
         let value: serde_json::Value =
-            serde_json::from_str(source).map_err(|e| Error::Parse(format!("{e}")))?;
+            serde_json::from_str(source).map_err(|e| Error::Parse(fmt_macro!("{e}")))?;
         let (root, defs) = compile_json(&value)?;
         Ok(Self { root, defs })
     }
@@ -258,7 +290,7 @@ impl SchemaDocument {
         let mut serializer = tpt_yaml_serde::Serializer::new();
         let node = value
             .serialize(&mut serializer)
-            .map_err(|e| Error::InvalidSchema(format!("serialization failed: {e}")))?;
+            .map_err(|e| Error::InvalidSchema(fmt_macro!("serialization failed: {e}")))?;
         let (document, node) = serializer.into_document(node);
         Ok(self.validate(&document, node))
     }
@@ -303,16 +335,18 @@ fn json_mapping_entries(
     if let Some(serde_json::Value::String(name)) = obj.get("$ref") {
         let internal =
             name.strip_prefix("#/$defs/").or_else(|| name.strip_prefix("#/")).ok_or_else(|| {
-                Error::InvalidSchema(format!("only internal $refs are supported: {name}"))
+                Error::InvalidSchema(fmt_macro!(
+                    "only internal $refs are supported for JSON schema source: {name}"
+                ))
             })?;
         if !is_root && !defs.contains_key(internal) {
-            return Err(Error::InvalidSchema(format!("unknown $ref target: {name}")));
+            return Err(Error::InvalidSchema(fmt_macro!("unknown $ref target: {name}")));
         }
         return Ok(Schema::Ref(name.clone()));
     }
     if let Some(serde_json::Value::String(name)) = obj.get("type") {
         let json_type = JsonType::from_name(name)
-            .ok_or_else(|| Error::InvalidSchema(format!("unknown type: {name}")))?;
+            .ok_or_else(|| Error::InvalidSchema(fmt_macro!("unknown type: {name}")))?;
         let opt_usize = |key: &str| obj.get(key).and_then(|v| v.as_u64()).map(|v| v as usize);
         let opt_f64 = |key: &str| obj.get(key).and_then(|v| v.as_f64());
         return Ok(match json_type {
@@ -325,6 +359,10 @@ fn json_mapping_entries(
                         Some(serde_json::Value::String(source)) => pattern::compile(source)
                             .map(Some)
                             .map_err(|_| Error::InvalidPattern(source.clone()))?,
+                        _ => None,
+                    },
+                    format: match obj.get("format") {
+                        Some(serde_json::Value::String(name)) => format::Format::from_name(name),
                         _ => None,
                     },
                 }
@@ -398,9 +436,53 @@ fn json_mapping_entries(
     }
     Ok(Schema::Constant(true))
 }
-fn compile_root(
+
+/// Resolves a `$ref` string encountered while compiling YAML schema source, returning the key
+/// under which the target schema is (or will be) stored in `defs`. Parameterizing compilation
+/// over this trait is what lets [`SchemaDocument::from_yaml_str`] (internal-only, stays
+/// `no_std`+`alloc`-friendly) and [`SchemaDocument::from_yaml_file`] (also resolves external
+/// files, `std`-only — see `external.rs`) share the same traversal code.
+pub(crate) trait RefResolver {
+    fn resolve(
+        &mut self,
+        raw: &str,
+        defs: &mut BTreeMap<String, Schema>,
+        is_root: bool,
+    ) -> Result<String, Error>;
+}
+
+/// The [`RefResolver`] used by [`SchemaDocument::from_yaml_str`]: only `#/$defs/<name>` /
+/// `#/<name>` are accepted; anything else is a compile error naming `from_yaml_file` as the
+/// alternative.
+pub(crate) struct NoExternal;
+
+impl RefResolver for NoExternal {
+    fn resolve(
+        &mut self,
+        raw: &str,
+        defs: &mut BTreeMap<String, Schema>,
+        is_root: bool,
+    ) -> Result<String, Error> {
+        let internal =
+            raw.strip_prefix("#/$defs/").or_else(|| raw.strip_prefix("#/")).ok_or_else(|| {
+                Error::InvalidSchema(fmt_macro!(
+                    "only internal $refs are supported here (external $ref requires \
+                     SchemaDocument::from_yaml_file, which needs the `std` feature): {raw}"
+                ))
+            })?;
+        // Nested (non-root) refs may point forward at a `$defs` entry not yet compiled — resolved
+        // lazily at validation time instead, same as before this was made generic.
+        if is_root && !defs.contains_key(internal) {
+            return Err(Error::InvalidSchema(fmt_macro!("unknown $ref target: {raw}")));
+        }
+        Ok(raw.to_string())
+    }
+}
+
+pub(crate) fn compile_root<R: RefResolver>(
     document: &Document,
     root: NodeId,
+    resolver: &mut R,
 ) -> Result<(Schema, BTreeMap<String, Schema>), Error> {
     let Some(NodeKind::Mapping(entries)) = document.node(root).map(|n| &n.kind) else {
         return Err(Error::InvalidSchema("schema root must be a mapping".to_string()));
@@ -416,14 +498,14 @@ fn compile_root(
                     let def_name = scalar_key(document, *def_key_id).ok_or_else(|| {
                         Error::InvalidSchema("$defs keys must be strings".to_string())
                     })?;
-                    let schema = compile_schema(document, *def_value_id)?;
+                    let schema = compile_schema(document, *def_value_id, &mut defs, resolver)?;
                     defs.insert(def_name, schema);
                 }
             }
         }
     }
     // Compile the root schema *without* re-entering `$defs` (already done above).
-    let root_schema = compile_mapping_entries(document, entries, &defs, true)?;
+    let root_schema = compile_mapping_entries(document, entries, &mut defs, true, resolver)?;
     Ok((root_schema, defs))
 }
 
@@ -434,18 +516,24 @@ fn scalar_key(document: &Document, id: NodeId) -> Option<String> {
     }
 }
 
-fn compile_schema(document: &Document, id: NodeId) -> Result<Schema, Error> {
+fn compile_schema<R: RefResolver>(
+    document: &Document,
+    id: NodeId,
+    defs: &mut BTreeMap<String, Schema>,
+    resolver: &mut R,
+) -> Result<Schema, Error> {
     let Some(NodeKind::Mapping(entries)) = document.node(id).map(|n| &n.kind) else {
         return Err(Error::InvalidSchema("schema must be a mapping".to_string()));
     };
-    compile_mapping_entries(document, entries, &BTreeMap::new(), false)
+    compile_mapping_entries(document, entries, defs, false, resolver)
 }
 
-fn compile_mapping_entries(
+fn compile_mapping_entries<R: RefResolver>(
     document: &Document,
     entries: &[(NodeId, NodeId)],
-    defs: &BTreeMap<String, Schema>,
+    defs: &mut BTreeMap<String, Schema>,
     is_root: bool,
+    resolver: &mut R,
 ) -> Result<Schema, Error> {
     let by_key = |name: &str| {
         entries
@@ -457,22 +545,16 @@ fn compile_mapping_entries(
     if let Some(ref_id) = by_key("$ref") {
         let name = scalar_key(document, ref_id)
             .ok_or_else(|| Error::InvalidSchema("$ref must be a string".to_string()))?;
-        let internal =
-            name.strip_prefix("#/$defs/").or_else(|| name.strip_prefix("#/")).ok_or_else(|| {
-                Error::InvalidSchema(format!("only internal $refs are supported: {name}"))
-            })?;
-        if !is_root && !defs.contains_key(internal) && !entries_is_def_of_self(defs, internal) {
-            return Err(Error::InvalidSchema(format!("unknown $ref target: {name}")));
-        }
-        return Ok(Schema::Ref(name));
+        let key = resolver.resolve(&name, defs, is_root)?;
+        return Ok(Schema::Ref(key));
     }
 
     if let Some(type_id) = by_key("type") {
         let name = scalar_key(document, type_id)
             .ok_or_else(|| Error::InvalidSchema("type must be a string".to_string()))?;
         let json_type = JsonType::from_name(&name)
-            .ok_or_else(|| Error::InvalidSchema(format!("unknown type: {name}")))?;
-        return compile_typed(document, entries, json_type);
+            .ok_or_else(|| Error::InvalidSchema(fmt_macro!("unknown type: {name}")))?;
+        return compile_typed(document, entries, json_type, defs, resolver);
     }
 
     if let Some(enum_id) = by_key("enum") {
@@ -496,11 +578,11 @@ fn compile_mapping_entries(
     for (name, variant) in [("oneOf", 0), ("anyOf", 1), ("allOf", 2)] {
         if let Some(seq_id) = by_key(name) {
             let Some(NodeKind::Sequence(items)) = document.node(seq_id).map(|n| &n.kind) else {
-                return Err(Error::InvalidSchema(format!("{name} must be a sequence")));
+                return Err(Error::InvalidSchema(fmt_macro!("{name} must be a sequence")));
             };
             let schemas = items
                 .iter()
-                .map(|&item| compile_schema(document, item))
+                .map(|&item| compile_schema(document, item, defs, resolver))
                 .collect::<Result<Vec<_>, _>>()?;
             return Ok(match variant {
                 0 => Schema::OneOf(schemas),
@@ -511,22 +593,18 @@ fn compile_mapping_entries(
     }
 
     if let Some(not_id) = by_key("not") {
-        return Ok(Schema::Not(Box::new(compile_schema(document, not_id)?)));
+        return Ok(Schema::Not(Box::new(compile_schema(document, not_id, defs, resolver)?)));
     }
 
     Ok(Schema::Constant(true))
 }
 
-/// Whether the `$ref` target could be this schema itself (a `def` of itself) — used only to let
-/// recursive-looking refs compile; runtime cycle detection still caps recursion.
-fn entries_is_def_of_self(defs: &BTreeMap<String, Schema>, _name: &str) -> bool {
-    defs.is_empty()
-}
-
-fn compile_typed(
+fn compile_typed<R: RefResolver>(
     document: &Document,
     entries: &[(NodeId, NodeId)],
     json_type: JsonType,
+    defs: &mut BTreeMap<String, Schema>,
+    resolver: &mut R,
 ) -> Result<Schema, Error> {
     let by_key = |name: &str| {
         entries
@@ -540,6 +618,7 @@ fn compile_typed(
             min_length: optional_usize(document, by_key("minLength")),
             max_length: optional_usize(document, by_key("maxLength")),
             pattern: optional_pattern(document, by_key("pattern"))?,
+            format: optional_format(document, by_key("format")),
         },
         JsonType::Number => Schema::Number {
             minimum: optional_f64(document, by_key("minimum")),
@@ -550,7 +629,7 @@ fn compile_typed(
         },
         JsonType::Array => Schema::Array {
             items: by_key("items")
-                .map(|id| compile_schema(document, id))
+                .map(|id| compile_schema(document, id, defs, resolver))
                 .transpose()?
                 .map(Box::new),
             min_items: optional_usize(document, by_key("minItems")),
@@ -569,7 +648,7 @@ fn compile_typed(
                             })?;
                             Ok::<(String, Schema), Error>((
                                 entry_name(&name),
-                                compile_schema(document, v)?,
+                                compile_schema(document, v, defs, resolver)?,
                             ))
                         })
                         .collect::<Result<Vec<_>, _>>()?,
@@ -604,9 +683,13 @@ fn compile_typed(
                     Some(NodeKind::Scalar(scalar)) => match scalar.value {
                         tpt_yaml_core::ScalarValue::Bool(false) => Additional::Forbid,
                         tpt_yaml_core::ScalarValue::Bool(true) => Additional::Allow,
-                        _ => Additional::Schema(Box::new(compile_schema(document, id)?)),
+                        _ => Additional::Schema(Box::new(compile_schema(
+                            document, id, defs, resolver,
+                        )?)),
                     },
-                    _ => Additional::Schema(Box::new(compile_schema(document, id)?)),
+                    _ => {
+                        Additional::Schema(Box::new(compile_schema(document, id, defs, resolver)?))
+                    }
                 },
                 None => Additional::Allow,
             },
@@ -651,6 +734,16 @@ fn optional_pattern(
     };
     pattern::compile(&source).map(Some).map_err(|_| Error::InvalidPattern(source))
 }
+
+/// Maps a `format` keyword value to a supported validator; silently `None` (ignored, same as this
+/// crate's existing unknown-keyword convention) if `format` is absent, not a string, or names a
+/// format this crate doesn't validate.
+fn optional_format(document: &Document, id: Option<NodeId>) -> Option<format::Format> {
+    let id = id?;
+    let name = scalar_key(document, id)?;
+    format::Format::from_name(&name)
+}
+
 /// The category of a [`ValidationIssue`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IssueKind {
@@ -658,6 +751,7 @@ pub enum IssueKind {
     EnumMismatch,
     ConstMismatch,
     PatternMismatch,
+    FormatMismatch,
     MinLength,
     MaxLength,
     Minimum,
@@ -689,6 +783,7 @@ impl fmt::Display for IssueKind {
             Self::EnumMismatch => "enum mismatch",
             Self::ConstMismatch => "const mismatch",
             Self::PatternMismatch => "pattern mismatch",
+            Self::FormatMismatch => "format mismatch",
             Self::MinLength => "below minLength",
             Self::MaxLength => "above maxLength",
             Self::Minimum => "below minimum",
@@ -766,6 +861,9 @@ pub struct ValidationSettings {
     pub objects: bool,
     pub combinators: bool,
     pub refs: bool,
+    /// Gates the `format` keyword check specifically (independent of `strings`, so `format` can
+    /// be turned off while `minLength`/`maxLength`/`pattern` stay on, or vice versa).
+    pub formats: bool,
     /// Cap on `$ref`/combinator recursion; `DepthExceeded` past this.
     pub max_depth: usize,
 }
@@ -781,6 +879,7 @@ impl Default for ValidationSettings {
             objects: true,
             combinators: true,
             refs: true,
+            formats: true,
             max_depth: 64,
         }
     }
@@ -801,6 +900,7 @@ impl ValidationSettings {
         self.objects = groups.contains(&"objects");
         self.combinators = groups.contains(&"combinators");
         self.refs = groups.contains(&"refs");
+        self.formats = groups.contains(&"formats");
         self
     }
 
@@ -850,7 +950,7 @@ fn validate_node(
                         node,
                         path,
                         IssueKind::TypeMismatch,
-                        format!("expected {}, found {actual_name}", json_type.name()),
+                        fmt_macro!("expected {}, found {actual_name}", json_type.name()),
                         report,
                     );
                 }
@@ -873,7 +973,7 @@ fn validate_node(
                 );
             }
         }
-        Schema::String { min_length, max_length, pattern: pat } => {
+        Schema::String { min_length, max_length, pattern: pat, format: fmt_kw } => {
             if settings.strings {
                 // `type: string` compiles to this variant, so the arm carries the type check
                 // itself: a non-string is a TypeMismatch and string constraints don't apply.
@@ -885,7 +985,7 @@ fn validate_node(
                         node,
                         path,
                         IssueKind::TypeMismatch,
-                        format!("expected string, found {actual}"),
+                        fmt_macro!("expected string, found {actual}"),
                         report,
                     );
                 } else {
@@ -897,7 +997,7 @@ fn validate_node(
                                 node,
                                 path,
                                 IssueKind::MinLength,
-                                format!("shorter than {min}"),
+                                fmt_macro!("shorter than {min}"),
                                 report,
                             );
                         }
@@ -909,7 +1009,7 @@ fn validate_node(
                                 node,
                                 path,
                                 IssueKind::MaxLength,
-                                format!("longer than {max}"),
+                                fmt_macro!("longer than {max}"),
                                 report,
                             );
                         }
@@ -922,6 +1022,18 @@ fn validate_node(
                                 path,
                                 IssueKind::PatternMismatch,
                                 "string does not match pattern",
+                                report,
+                            );
+                        }
+                    }
+                    if let Some(fmt_kw) = fmt_kw {
+                        if settings.formats && !fmt_kw.is_match(&scalar) {
+                            issue(
+                                document,
+                                node,
+                                path,
+                                IssueKind::FormatMismatch,
+                                fmt_macro!("does not match format `{}`", fmt_kw.name()),
                                 report,
                             );
                         }
@@ -939,7 +1051,7 @@ fn validate_node(
                         node,
                         path,
                         IssueKind::TypeMismatch,
-                        format!("expected number, found {actual}"),
+                        fmt_macro!("expected number, found {actual}"),
                         report,
                     );
                     return;
@@ -951,7 +1063,7 @@ fn validate_node(
                             node,
                             path,
                             IssueKind::Minimum,
-                            format!("{value} below {bound}"),
+                            fmt_macro!("{value} below {bound}"),
                             report,
                         );
                     }
@@ -963,7 +1075,7 @@ fn validate_node(
                             node,
                             path,
                             IssueKind::Maximum,
-                            format!("{value} above {bound}"),
+                            fmt_macro!("{value} above {bound}"),
                             report,
                         );
                     }
@@ -975,7 +1087,7 @@ fn validate_node(
                             node,
                             path,
                             IssueKind::ExclusiveMinimum,
-                            format!("{value} at or below {bound}"),
+                            fmt_macro!("{value} at or below {bound}"),
                             report,
                         );
                     }
@@ -987,7 +1099,7 @@ fn validate_node(
                             node,
                             path,
                             IssueKind::ExclusiveMaximum,
-                            format!("{value} at or above {bound}"),
+                            fmt_macro!("{value} at or above {bound}"),
                             report,
                         );
                     }
@@ -999,7 +1111,7 @@ fn validate_node(
                             node,
                             path,
                             IssueKind::MultipleOf,
-                            format!("{value} not a multiple of {step}"),
+                            fmt_macro!("{value} not a multiple of {step}"),
                             report,
                         );
                     }
@@ -1017,7 +1129,7 @@ fn validate_node(
                         node,
                         path,
                         IssueKind::TypeMismatch,
-                        format!("expected array, found {actual}"),
+                        fmt_macro!("expected array, found {actual}"),
                         report,
                     );
                     return;
@@ -1029,7 +1141,7 @@ fn validate_node(
                             node,
                             path,
                             IssueKind::MinItems,
-                            format!("fewer than {min} items"),
+                            fmt_macro!("fewer than {min} items"),
                             report,
                         );
                     }
@@ -1041,7 +1153,7 @@ fn validate_node(
                             node,
                             path,
                             IssueKind::MaxItems,
-                            format!("more than {max} items"),
+                            fmt_macro!("more than {max} items"),
                             report,
                         );
                     }
@@ -1097,7 +1209,7 @@ fn validate_node(
                         node,
                         path,
                         IssueKind::TypeMismatch,
-                        format!("expected object, found {actual}"),
+                        fmt_macro!("expected object, found {actual}"),
                         report,
                     );
                     return;
@@ -1109,7 +1221,7 @@ fn validate_node(
                             node,
                             path,
                             IssueKind::MinProperties,
-                            format!("fewer than {min} properties"),
+                            fmt_macro!("fewer than {min} properties"),
                             report,
                         );
                     }
@@ -1121,7 +1233,7 @@ fn validate_node(
                             node,
                             path,
                             IssueKind::MaxProperties,
-                            format!("more than {max} properties"),
+                            fmt_macro!("more than {max} properties"),
                             report,
                         );
                     }
@@ -1136,7 +1248,7 @@ fn validate_node(
                             node,
                             path,
                             IssueKind::RequiredMissing,
-                            format!("required property `{name}` missing"),
+                            fmt_macro!("required property `{name}` missing"),
                             report,
                         );
                     }
@@ -1167,7 +1279,7 @@ fn validate_node(
                                     node,
                                     path,
                                     IssueKind::AdditionalProperty,
-                                    format!("property `{name}` not allowed"),
+                                    fmt_macro!("property `{name}` not allowed"),
                                     report,
                                 );
                             }
@@ -1304,7 +1416,10 @@ fn validate_node(
         }
         Schema::Ref(name) => {
             if settings.refs {
-                // Compiled refs keep their full spelling ("#/$defs/flags"); strip it for lookup.
+                // Compiled refs keep their full spelling ("#/$defs/flags" for internal, or the
+                // normalized "file.yaml#/$defs/name" key for external) — an internal-style name
+                // still needs the "#/..." prefix stripped for lookup; an external key is already
+                // the literal `defs` key, so `unwrap_or` falls through unchanged.
                 let key = name
                     .strip_prefix("#/$defs/")
                     .or_else(|| name.strip_prefix("#/"))
@@ -1315,7 +1430,7 @@ fn validate_node(
                         node,
                         path,
                         IssueKind::RefUnresolved,
-                        format!("$ref `{name}` not in $defs"),
+                        fmt_macro!("$ref `{name}` not in $defs"),
                         report,
                     );
                     return;
@@ -1516,5 +1631,189 @@ $defs:
         let bad = Config { name: "a", ports: vec![-1] };
         let report = schema.validate_typed(&bad).unwrap();
         assert!(!report.is_valid());
+    }
+
+    // -- `format` keyword ---------------------------------------------------------------------
+
+    #[test]
+    fn format_email_valid_and_invalid() {
+        let schema = SchemaDocument::from_yaml_str("type: string\nformat: email\n").unwrap();
+        for ok in ["alice@example.com", "a.b+tag@sub.example.co.nz"] {
+            let doc = tpt_yaml_core::parse(&format!("{ok:?}\n")).unwrap();
+            let report = schema.validate(&doc, doc.root().unwrap());
+            assert!(report.is_valid(), "{ok} should be a valid email: {:?}", report.issues());
+        }
+        for bad in ["not-an-email", "@example.com", "alice@", "alice@nodot"] {
+            let doc = tpt_yaml_core::parse(&format!("{bad:?}\n")).unwrap();
+            let report = schema.validate(&doc, doc.root().unwrap());
+            assert!(!report.is_valid(), "{bad} should be an invalid email");
+            assert_eq!(report.issues()[0].kind, IssueKind::FormatMismatch);
+        }
+    }
+
+    #[test]
+    fn format_date_time_valid_and_invalid() {
+        let schema = SchemaDocument::from_yaml_str("type: string\nformat: date-time\n").unwrap();
+        for ok in ["2024-01-15T10:30:00Z", "2024-01-15T10:30:00.123+02:00"] {
+            let doc = tpt_yaml_core::parse(&format!("{ok:?}\n")).unwrap();
+            let report = schema.validate(&doc, doc.root().unwrap());
+            assert!(report.is_valid(), "{ok} should be a valid date-time: {:?}", report.issues());
+        }
+        for bad in ["2024-01-15", "not-a-date", "2024-13-01T00:00:00Z", "2024-01-15T25:00:00Z"] {
+            let doc = tpt_yaml_core::parse(&format!("{bad:?}\n")).unwrap();
+            let report = schema.validate(&doc, doc.root().unwrap());
+            assert!(!report.is_valid(), "{bad} should be an invalid date-time");
+            assert_eq!(report.issues()[0].kind, IssueKind::FormatMismatch);
+        }
+    }
+
+    #[test]
+    fn format_uri_valid_and_invalid() {
+        let schema = SchemaDocument::from_yaml_str("type: string\nformat: uri\n").unwrap();
+        for ok in
+            ["https://example.com/path?q=1", "mailto:alice@example.com", "urn:isbn:0451450523"]
+        {
+            let doc = tpt_yaml_core::parse(&format!("{ok:?}\n")).unwrap();
+            let report = schema.validate(&doc, doc.root().unwrap());
+            assert!(report.is_valid(), "{ok} should be a valid uri: {:?}", report.issues());
+        }
+        for bad in ["not a uri", "://missing-scheme", "http:"] {
+            let doc = tpt_yaml_core::parse(&format!("{bad:?}\n")).unwrap();
+            let report = schema.validate(&doc, doc.root().unwrap());
+            assert!(!report.is_valid(), "{bad} should be an invalid uri");
+            assert_eq!(report.issues()[0].kind, IssueKind::FormatMismatch);
+        }
+    }
+
+    #[test]
+    fn format_ipv4_ipv6_and_uuid() {
+        let schema = SchemaDocument::from_yaml_str(
+            "type: object\nproperties:\n  ip4: {type: string, format: ipv4}\n  ip6: {type: string, format: ipv6}\n  id: {type: string, format: uuid}\n",
+        )
+        .unwrap();
+        let doc = tpt_yaml_core::parse(
+            "ip4: \"192.168.1.1\"\nip6: \"2001:db8::1\"\nid: \"550e8400-e29b-41d4-a716-446655440000\"\n",
+        )
+        .unwrap();
+        assert!(schema.validate(&doc, doc.root().unwrap()).is_valid());
+
+        let bad =
+            tpt_yaml_core::parse("ip4: \"999.1.1.1\"\nip6: \"not-ipv6\"\nid: \"not-a-uuid\"\n")
+                .unwrap();
+        let report = schema.validate(&bad, bad.root().unwrap());
+        assert_eq!(report.issue_count(), 3);
+        assert!(report.issues().iter().all(|i| i.kind == IssueKind::FormatMismatch));
+    }
+
+    #[test]
+    fn unrecognized_format_is_silently_ignored() {
+        let schema =
+            SchemaDocument::from_yaml_str("type: string\nformat: not-a-real-format\n").unwrap();
+        let doc = tpt_yaml_core::parse("\"anything at all\"\n").unwrap();
+        assert!(schema.validate(&doc, doc.root().unwrap()).is_valid());
+    }
+
+    #[test]
+    fn formats_setting_gates_the_check() {
+        let schema = SchemaDocument::from_yaml_str("type: string\nformat: email\n").unwrap();
+        let doc = tpt_yaml_core::parse("\"not-an-email\"\n").unwrap();
+        let report = schema.validate_with(
+            &doc,
+            doc.root().unwrap(),
+            &ValidationSettings::new().only(&["types", "strings"]),
+        );
+        // `strings` is on but `formats` isn't in the `only` list, so the format check is skipped.
+        assert!(report.is_valid());
+    }
+
+    // -- external `$ref` (the `std` feature) ---------------------------------------------------
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn external_ref_resolves_a_definition_from_another_file() {
+        let dir = std::env::temp_dir().join(fmt_macro!(
+            "tpt-yaml-schema-test-{}-{}",
+            std::process::id(),
+            "ext-ref-basic"
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let common_path = dir.join("common.yaml");
+        let main_path = dir.join("main.yaml");
+        std::fs::write(
+            &common_path,
+            "$defs:\n  port:\n    type: number\n    minimum: 1\n    maximum: 65535\n",
+        )
+        .unwrap();
+        std::fs::write(
+            &main_path,
+            "type: object\nrequired: [name, port]\nproperties:\n  name: {type: string}\n  port:\n    $ref: \"common.yaml#/$defs/port\"\n",
+        )
+        .unwrap();
+
+        let schema = SchemaDocument::from_yaml_file(&main_path).unwrap();
+
+        let ok = tpt_yaml_core::parse("name: alpha\nport: 8080\n").unwrap();
+        let report = schema.validate(&ok, ok.root().unwrap());
+        assert!(report.is_valid(), "issues: {:?}", report.issues());
+
+        let bad = tpt_yaml_core::parse("name: alpha\nport: 99999\n").unwrap();
+        let report = schema.validate(&bad, bad.root().unwrap());
+        assert!(!report.is_valid());
+        assert_eq!(report.issues()[0].kind, IssueKind::Maximum);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn external_ref_to_a_whole_file_root_schema() {
+        let dir = std::env::temp_dir().join(fmt_macro!(
+            "tpt-yaml-schema-test-{}-{}",
+            std::process::id(),
+            "ext-ref-whole-file"
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let leaf_path = dir.join("leaf.yaml");
+        let main_path = dir.join("main.yaml");
+        std::fs::write(&leaf_path, "type: string\nminLength: 1\n").unwrap();
+        std::fs::write(&main_path, "$ref: \"leaf.yaml\"\n").unwrap();
+
+        let schema = SchemaDocument::from_yaml_file(&main_path).unwrap();
+        let ok = tpt_yaml_core::parse("\"hello\"\n").unwrap();
+        assert!(schema.validate(&ok, ok.root().unwrap()).is_valid());
+        let bad = tpt_yaml_core::parse("\"\"\n").unwrap();
+        assert!(!schema.validate(&bad, bad.root().unwrap()).is_valid());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn external_ref_circular_files_are_rejected_not_hung() {
+        let dir = std::env::temp_dir().join(fmt_macro!(
+            "tpt-yaml-schema-test-{}-{}",
+            std::process::id(),
+            "ext-ref-circular"
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let a_path = dir.join("a.yaml");
+        let b_path = dir.join("b.yaml");
+        std::fs::write(&a_path, "$ref: \"b.yaml\"\n").unwrap();
+        std::fs::write(&b_path, "$ref: \"a.yaml\"\n").unwrap();
+
+        let result = SchemaDocument::from_yaml_file(&a_path);
+        assert!(result.is_err(), "a circular external $ref chain must be rejected, not hang");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn from_yaml_str_rejects_an_external_looking_ref() {
+        let err = SchemaDocument::from_yaml_str("$ref: \"other.yaml#/$defs/foo\"\n").unwrap_err();
+        match err {
+            Error::InvalidSchema(msg) => assert!(msg.contains("from_yaml_file"), "{msg}"),
+            other => panic!("expected InvalidSchema, got {other:?}"),
+        }
     }
 }

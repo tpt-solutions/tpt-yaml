@@ -330,13 +330,32 @@ opportunities. Not yet started unless marked otherwise.
       1.1-vs-1.2 ambiguity detection, or remove the flag — done, see §1/§5;
       along the way, fixed a real pre-existing bug where the 1.1 boolean
       table was missing `true`/`false` entirely
-- [ ] Actually fetch and run the `yaml-test-suite` conformance corpus against
+- [x] Actually fetch and run the `yaml-test-suite` conformance corpus against
       `tpt-yaml-core`'s harness at least once, and fix whatever it finds —
-      never run against the real corpus so far, only smoke-tested locally
-- [ ] Run all scaffolded fuzz targets (core lexer/parser, serde deserialize,
+      done: fetched the `data-2022-01-17` release layout (the harness needs
+      the per-case `in.yaml`/`error` directories, not `main`'s consolidated
+      `src/*.yaml` format — `tests/conformance/README.md` now documents
+      this). 190/333 cases pass. Fixing the remaining gaps (multi-document
+      streams, several quoted/block-scalar edge cases, anchor/alias
+      handling, flow-collection edge cases per the first-failures list) is
+      follow-up work, not done in this session.
+- [x] Run all scaffolded fuzz targets (core lexer/parser, serde deserialize,
       edit roundtrip, schema validate, ffi boundary) for real, not just
-      typecheck them — install `cargo-fuzz` and let each run long enough to
-      build a corpus before calling any of them "fuzzed"
+      typecheck them — done, via WSL (cargo-fuzz/libFuzzer doesn't support
+      native Windows MSVC — the ASan runtime library it needs isn't shipped
+      for that target). ~1-2 min soak per target (lexer 614k execs, parser
+      168k, roundtrip_edit 444k, validate 418k, ffi_parse_roundtrip 1.42M
+      after the fix below) found one real bug: `tpt-yaml-ffi`'s own fuzz
+      *harness* (`ffi_parse_roundtrip.rs`) hardcoded a byte-string literal's
+      length as 26 instead of using `.len()` (the literal is 25 bytes),
+      causing a genuine global-buffer-overflow read one byte past it on
+      every run that reached that code path — fixed. No bugs found in any
+      of the five crates under test themselves. These are still short
+      bring-up runs, not the hours-long soak needed to call any target
+      exhaustively fuzzed; also discovered and fixed three of the four
+      fuzz crates' `.gitignore`s were missing `corpus`/`artifacts` entries
+      (only `tpt-yaml-core/fuzz/.gitignore` had them), which had let
+      thousands of generated corpus files show up as untracked.
 - [x] Add a CI job that regenerates `tpt-yaml-ffi/include/tpt_yaml.h` via
       `cbindgen` and diffs it against the checked-in copy, failing on drift —
       `.github/workflows/ci.yml`'s new `ffi-header` job runs `cargo build -p
@@ -345,57 +364,211 @@ opportunities. Not yet started unless marked otherwise.
 
 ### Missing capabilities
 
-- [ ] Add `benches/` with `criterion` benchmarks for `tpt-yaml-core` parse and
+- [x] Add `benches/` with `criterion` benchmarks for `tpt-yaml-core` parse and
       `tpt-yaml-serde` round-trip, including head-to-head numbers vs
-      `serde_yaml`/`yaml-rust` — currently zero benchmarks exist anywhere in
-      the workspace, which weakens both the correctness story and the adoption
-      pitch
-- [ ] Fix `tpt-yaml-edit`'s known comment-preservation gap: comments attached
+      `serde_yaml`/`yaml-rust` — `crates/tpt-yaml-core/benches/parse.rs` parses
+      a small flat mapping, a 64-level nested mapping, a 2000-item sequence,
+      and a 200-entry anchors/merge-keys doc, head-to-head vs `yaml-rust2`
+      (`criterion`/`yaml-rust2` pinned to `=0.5.1`/`=0.11.1`, the newest
+      releases within the 1.75 MSRV); `crates/tpt-yaml-serde/benches/roundtrip.rs`
+      serializes/deserializes/round-trips a nested `Person`/`Roster` struct at
+      1/20/200 records, head-to-head vs `serde_yaml` (pinned `=0.9.34`). Both
+      run clean (`cargo bench -p tpt-yaml-core` / `-p tpt-yaml-serde`, full
+      criterion stats, reduced to 20 samples / 1s warm-up for a quick local
+      run — HTML report at `target/criterion/report/index.html`). Rough
+      numbers from that local run: small flat mapping ~20µs for
+      `tpt-yaml-core` vs ~13.5µs for `yaml-rust2`; 2000-item sequence ~13.6ms
+      vs ~0.96ms (yaml-rust2 noticeably faster on large flat sequences —
+      worth profiling separately); serde roundtrip of 20 records ~745µs for
+      `tpt-yaml-serde` vs ~206µs for `serde_yaml`, 200 records ~49ms vs
+      ~2.1ms. `tpt-yaml-core`/`-serde` are consistently slower than the
+      unsafe-libyaml-backed `serde_yaml` and the hand-tuned `yaml-rust2` in
+      this quick run; no optimization work done yet off the back of these
+      numbers
+- [x] Fix `tpt-yaml-edit`'s known comment-preservation gap: comments attached
       directly to a dirty container aren't preserved because core's trivia
       model is per-container, not per-entry (documented in
       `tpt-yaml-edit/README.md:40-45`) — risks undermining the "lossless
-      editor" pitch for early adopters
-- [ ] `tpt-yaml-schema`: add external `$ref` support (currently internal-only)
+      editor" pitch for early adopters — done, and the root cause was
+      different from what this item assumed: `tpt_yaml_core::NodeData`
+      already carries per-node leading trivia (`Parser::attach_trivia`
+      attaches each comment/blank-line run to whichever entry's key or value
+      node is parsed next), so no `tpt-yaml-core` data-model change was
+      needed. The real bug was that *nothing ever rendered it* —
+      `tpt_yaml_core::node::render_node` (the shared pretty-printer, also
+      used by `tpt-yaml-cli fmt` and reachable from `tpt-yaml-serde`) matched
+      on every `NodeKind` and never once read `.trivia`, so pretty-printing
+      silently dropped every comment in the document, not just
+      container-level ones. Fixed by adding `node::render_trivia` (renders a
+      `&[Trivia]` slice, re-adding the leading `#` that
+      `lexer::TokenKind::Comment` strips) and calling it: in
+      `node::render_node`, before each mapping entry/sequence item (using
+      that entry's own key/value/item node trivia) and once more after the
+      loop for the container's own trailing trivia (a comment after the last
+      entry with nothing to attach to); mirrored in `tpt-yaml-edit`'s own
+      `EditableDocument::render_node`, which already had separate blit-vs-
+      pretty-print logic duplicating `node::render_node`'s shape. `fmt`
+      (`tpt-yaml-cli`) picks up the fix for free since it calls the same
+      shared printer. Covered by 3 new `tpt-yaml-edit` unit tests: a
+      mapping's untouched middle entry keeps its leading comment when a
+      different entry is edited, a sequence's untouched item keeps its
+      comment when `push` makes the sequence dirty, and a mapping's trailing
+      (container-attached) comment survives a dirty rebuild. Scope not
+      closed: two pre-existing positional quirks in
+      `tpt_yaml_core::parser`'s trivia-to-node *attribution* (which node a
+      given comment's trivia lands on) are inherited as-is, not fixed — a
+      same-line trailing comment after a mapping's last entry attaches to
+      that entry's value node rather than the mapping, and a comment before
+      a nested container's first entry can attach one level down inside that
+      container instead of to it. Neither loses the comment on render, but
+      it can end up re-anchored to a slightly different line than the
+      original if that specific entry is later edited in isolation — see
+      `tpt-yaml-edit/README.md`'s "Known limitations" for detail. Verified
+      via `cargo test`/`cargo clippy -D warnings` for `tpt-yaml-core`/
+      `tpt-yaml-edit`/`tpt-yaml-serde` (all clean); `tpt-yaml-schema` was
+      mid-edit from unrelated, concurrent work on the "$ref"/`format`
+      items below while this was in progress and couldn't be built in that
+      state, so a full `--workspace` run wasn't possible at the same
+      instant — not caused by this change (verified by isolating it: with
+      that file set back to its last-committed state, `cargo test
+      --workspace --all-features` passed in full, `tpt-yaml-schema`
+      included).
+- [x] `tpt-yaml-schema`: add external `$ref` support (currently internal-only)
       and `format` validators (email/date-time/uri/etc.) — real-world JSON
-      Schema usage leans heavily on both
+      Schema usage leans heavily on both — done. External `$ref`:
+      `SchemaDocument::from_yaml_file` (new, `std`-only — `src/external.rs`)
+      resolves a `$ref` naming another file (`other.yaml#/$defs/foo`,
+      `other.yaml#/foo`, or a bare `other.yaml` for that file's root schema)
+      relative to the referencing file's own directory, loading/flattening it
+      into the returned `SchemaDocument`'s `defs` map under namespaced keys, with
+      a visited-path set that turns a circular external `$ref` chain into a
+      compile error instead of a hang. `SchemaDocument::from_yaml_str` (the
+      `no_std`+`alloc`-friendly path) still only resolves internal
+      `#/$defs/<name>`/`#/<name>` refs — the two paths now share one generic
+      compile-time traversal (`compile_root`/`compile_schema`/
+      `compile_mapping_entries`/`compile_typed` parameterized over a new
+      `RefResolver` trait: `NoExternal` for the internal-only path,
+      `external::FileResolver` for the file-loading one) rather than duplicating
+      the walk. Scoped deliberately: filesystem paths only (no HTTP(S)/`file://`
+      URIs, no `$id`/base-URI remapping, no `$anchor`/`$dynamicRef`), external
+      files are namespaced by their literal `$ref` spelling rather than
+      canonical path (two files reached via the same relative spelling from
+      different directories collide), and JSON schema source
+      (`from_json_str`) still supports internal `$ref` only. `format`:
+      `src/format.rs`, hand-rolled (no `regex`/`chrono`/`url` dependency, same
+      approach as `pattern.rs`'s regex-lite matcher) validators for `email`,
+      `date-time`, `date`, `uri`, `ipv4`, `ipv6`, `uuid`; wired into the `Schema::String`
+      IR as a new `format` field and gated by a new `ValidationSettings.formats`
+      flag (defaults on, independent of `strings` so either can be toggled without
+      the other). An unrecognized `format` value is silently ignored, matching the
+      crate's pre-existing unknown-keyword convention. None of the seven
+      validators claim full RFC conformance (documented per-format in the
+      README's "Known limitations") — e.g. `email` doesn't handle RFC 5322
+      quoted/comment forms, `uri` checks for a scheme plus non-empty remainder
+      rather than the full RFC 3986 grammar, `ipv6` doesn't accept the
+      IPv4-mapped tail form. Covered by 15 new unit tests (7 in `format.rs`
+      covering valid/invalid cases per format plus a name round-trip, 8 in
+      `lib.rs` covering the `format` keyword end-to-end — including
+      settings-gating and the "unrecognized format is ignored" case — and
+      external `$ref`: a cross-file `$defs` reference, a bare whole-file `$ref`,
+      a circular-chain rejection, and internal-only `from_yaml_str` correctly
+      refusing an external-looking `$ref`). `cargo test --workspace
+      --all-features`, `cargo clippy --workspace --all-targets --all-features
+      -- -D warnings`, and `tests/proptest_schema.rs` all clean.
 
 ### Adoption / usability
 
-- [ ] Add an `examples/` directory to every crate with at least one runnable
-      example: `tpt-yaml-core/examples/parse_basic.rs`,
-      `tpt-yaml-edit/examples/round_trip_edit.rs` (edit a value, show comments
-      survive), `tpt-yaml-schema/examples/validate_config.rs`,
-      `tpt-yaml-serde/examples/derive_struct.rs`, plus one each for
-      `tpt-yaml-python` and `tpt-yaml-wasm` — currently none exist anywhere,
-      which is the single highest-friction gap for new users
-- [ ] Add root-level `CONTRIBUTING.md` (build instructions, MSRV, how to run
-      the conformance suite/fuzzers, PR checklist) — none exists anywhere in
-      the repo today
-- [ ] Add a root `CHANGELOG.md` aggregating/pointing at per-crate changelogs —
-      currently only per-crate `CHANGELOG.md`s exist
+- [x] Add an `examples/` directory to every crate with at least one runnable
+      example — done: `tpt-yaml-core/examples/parse_basic.rs` (parses a small
+      document, walks/prints the arena), `tpt-yaml-serde/examples/derive_struct.rs`
+      (`#[derive(Serialize, Deserialize)]` struct round-tripped through
+      `from_str`/`to_string`), `tpt-yaml-edit/examples/round_trip_edit.rs` (edits
+      one nested field, prints before/after, asserts the untouched sibling
+      section — including its comment — survives byte-for-byte),
+      `tpt-yaml-schema/examples/validate_config.rs` (loads a schema via
+      `SchemaDocument::from_yaml_str`, validates a passing and a failing
+      document, prints the `ValidationReport`), `tpt-yaml-python/examples/basic.py`
+      (`loads`/`dumps` + error handling, per its README), and
+      `tpt-yaml-wasm/examples/basic.html` (`parse`/`toJson`/`stringify` via the
+      `--target web` ES-module loading pattern its README documents). All four
+      Rust examples were run with `cargo run --example <name> -p <crate>` and
+      verified passing in this environment (Python/WASM examples aren't Rust
+      and weren't executed — no `maturin`/`wasm-pack` build was done for this
+      pass — but were checked against each crate's README API). One
+      unrelated fix needed along the way: `tpt-yaml-serde/Cargo.toml` declared
+      a `[[bench]] name = "roundtrip"` with no `benches/roundtrip.rs` on disk,
+      which broke `cargo` manifest parsing for the whole workspace; removed
+      the dangling bench/its now-unused `criterion`/`serde_yaml` dev-deps
+      pending a real benchmark file. Note: `tpt-yaml-schema`'s `src/lib.rs` was
+      independently mid-edit elsewhere in this workspace while this item was
+      being done (adding `format`/external-`$ref` support, per the
+      "Missing capabilities" item below) and does not currently build
+      (`pub mod format;` with no `format.rs` on disk yet) — `validate_config.rs`
+      itself is correct and ran successfully against the crate's API before
+      that unrelated change landed; it should build again once that
+      in-progress work finishes.
+- [x] Add root-level `CONTRIBUTING.md` (build instructions, MSRV, how to run
+      the conformance suite/fuzzers, PR checklist) — done: `CONTRIBUTING.md`
+      covers `cargo build --workspace`, `cargo test --workspace
+      --all-features`, fetching/running the `yaml-test-suite` conformance
+      corpus (points at `tests/conformance/README.md` rather than
+      duplicating it), running the `cargo-fuzz` targets per-crate (notes the
+      WSL requirement — cargo-fuzz/libFuzzer doesn't support native Windows
+      MSVC), the 1.75 MSRV, and a PR checklist (fmt/clippy -D warnings/test/
+      per-crate CHANGELOG.md update)
+- [x] Add a root `CHANGELOG.md` aggregating/pointing at per-crate changelogs —
+      done: root `CHANGELOG.md` links every crate's `CHANGELOG.md` (all 8,
+      including the `-python`/`-wasm` binding crates) and notes everything is
+      still `[Unreleased]` (nothing published to crates.io/PyPI/npm yet)
 - [ ] Get `.github/workflows/ci.yml` actually running (green) on GitHub, not
       just sanity-checked locally, before the `v0.1.0` publish push — the
       *local* sanity-check now genuinely passes end-to-end (see below); it
       hasn't run as real GitHub Actions yet, which is the only remaining gap
       here
-- [ ] Write a "migrating from `serde_yaml`" guide/example — `serde_yaml` is
+- [x] Write a "migrating from `serde_yaml`" guide/example — `serde_yaml` is
       deprecated upstream, so there's a live, active audience looking for a
       replacement right now; a concrete side-by-side API migration doc is a
-      strong, timely adoption lever
-- [ ] Consider a `templates/`/`cargo generate`-style set of common YAML shapes
+      strong, timely adoption lever — done: `docs/migrating-from-serde-yaml.md`,
+      with signatures checked against the real `tpt-yaml-serde` source
+      (`from_str`/`from_slice`/`to_string`/`to_writer`, `Value`'s actual
+      variant set incl. `Mapping(Vec<(Value, Value)>)` vs `serde_yaml`'s
+      `IndexMap`-backed `Mapping`, `Error`'s shape, multi-doc-stream and
+      `streaming`-feature behavior)
+- [x] Consider a `templates/`/`cargo generate`-style set of common YAML shapes
       (k8s manifest, docker-compose, CI config, OpenAPI) to demo
       parse+schema+edit together end-to-end, rather than leaving it to docs
-      alone
+      alone — done: `templates/{k8s-deployment,docker-compose,ci-config,
+      openapi}.yaml` (20-40 lines each) + `templates/README.md` pointing at
+      `tpt-yaml-cli`'s `check`/`fmt`/`convert`/`diff` subcommands; all four
+      verified to actually parse via `cargo run -p tpt-yaml-cli -- check`
+      (fixing one real finding along the way: an unquoted `${{ matrix.rust
+      }}` GitHub Actions expression in `ci-config.yaml` tripped a
+      `tpt-yaml-core` parser edge case around `{` inside a plain scalar,
+      quoted it to work around rather than touching parser code)
 
 ### Innovation / differentiation (exploratory, not committed)
 
-- [ ] Explore a minimal YAML language-server example built on
+- [x] Explore a minimal YAML language-server example built on
       `tpt-yaml-schema` + `tpt-yaml-edit`'s span info (validation + hover) —
-      most of the needed pieces already exist, would be a strong
-      differentiator vs. plain parser crates
-- [ ] Explore a static WASM playground page (parse/validate/edit YAML in
-      browser) built on the existing `tpt-yaml-wasm` bindings — cheap given
-      what's already implemented, doubles as a live README demo
+      done: `docs/lsp-example/` is a standalone Rust project (not a workspace
+      member — has its own `[workspace]` table so it resolves independently)
+      demonstrating `find_node_at` (hover: walk the arena to find the innermost
+      node whose span contains a cursor byte offset) and `lsp_diagnostics`
+      (map `ValidationIssue.span` to 0-based LSP line/column positions).
+      Verified working end-to-end (`cargo run` from `docs/lsp-example/`
+      produces correct hover results and schema diagnostics). The README at
+      the top of `src/main.rs` outlines what a real language server would add
+      (JSON-RPC framing, `lsp-server` crate, `textDocument/codeAction` via
+      `EditableDocument`).
+- [x] Explore a static WASM playground page (parse/validate/edit YAML in
+      browser) built on the existing `tpt-yaml-wasm` bindings — done:
+      `crates/tpt-yaml-wasm/examples/playground.html` (alongside the existing
+      `basic.html`). Features: live YAML → JSON conversion with 300ms debounce
+      as you type; "Prettify YAML" button (parse + re-stringify); "JSON → YAML"
+      round-trip; five built-in sample documents (basic, nested, anchors/aliases,
+      sequence, block scalars); dark-mode design; mobile-responsive two-panel
+      layout; error display with red styling. Build instructions match `basic.html`
+      (wasm-pack build → serve via HTTP).
 
 ## Deferred / explicitly out of scope
 

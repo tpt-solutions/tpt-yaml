@@ -17,6 +17,11 @@ libfuzzer-sys = "0.4"
 [dependencies.tpt-yaml-edit]
 path = ".."
 
+[dependencies.tpt-yaml-core]
+path = "../../tpt-yaml-core"
+default-features = false
+features = ["alloc"]
+
 [[bin]]
 name = "roundtrip_edit"
 path = "fuzz_targets/roundtrip_edit.rs"

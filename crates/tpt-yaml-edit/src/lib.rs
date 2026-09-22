@@ -13,11 +13,14 @@
 //!
 //! This means editing one field deep in a large document leaves sibling fields — and any
 //! subtree not on the edited node's ancestor path — byte-identical, including their comments
-//! and formatting. The cost: a container that becomes dirty (something inside it changed)
-//! loses *its own* directly-attached trivia (comments immediately before/between/after its
-//! entries), since `tpt_yaml_core`'s trivia model attaches comments to the whole container, not
-//! per-entry, so there's no per-entry position to reinsert them at once that container is being
-//! reconstructed rather than blitted as one unit. Nested clean subtrees are unaffected.
+//! and formatting. A dirty container (something inside it changed) is reconstructed rather than
+//! blitted as one unit, but each of its untouched children still carries its own leading trivia
+//! (`tpt_yaml_core::node::NodeData::trivia`), and `render()` re-emits it as it walks the
+//! container's entries — including the container's own trailing trivia (a comment after the
+//! last entry with no specific entry to attach to). Only entries that are themselves
+//! edited/removed lose their trivia, along with the rest of that entry. Nested clean subtrees
+//! are unaffected either way. See the README's "Known limitations" for a couple of positional
+//! edge cases inherited from `tpt_yaml_core`'s trivia-to-node attribution.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
@@ -34,7 +37,7 @@ pub use value::EditValue;
 use alloc::collections::BTreeSet;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use tpt_yaml_core::node::{is_nonempty_collection, render_inline};
+use tpt_yaml_core::node::{is_nonempty_collection, render_inline, render_trivia};
 use tpt_yaml_core::{Document, NodeData, NodeId, NodeKind, Scalar, ScalarStyle, ScalarValue};
 
 /// A parsed document plus a record of which nodes have been edited, supporting a
@@ -283,6 +286,17 @@ impl EditableDocument {
                     return;
                 }
                 for (key_id, value_id) in entries {
+                    // A container that becomes dirty is reconstructed via this pretty-print path
+                    // rather than blitted as one unit; without re-emitting each untouched entry's
+                    // own leading trivia here, comments attached to entries that weren't
+                    // themselves edited would silently disappear even though their `NodeId` (and
+                    // its `trivia`) is unchanged.
+                    if let Some(key_node) = self.document.node(*key_id) {
+                        render_trivia(&key_node.trivia, indent, out);
+                    }
+                    if let Some(value_node) = self.document.node(*value_id) {
+                        render_trivia(&value_node.trivia, indent, out);
+                    }
                     out.push_str(&prefix);
                     self.render_leaf(*key_id, out);
                     let value_node = self.document.node(*value_id);
@@ -295,6 +309,9 @@ impl EditableDocument {
                         out.push('\n');
                     }
                 }
+                // Trivia attached to the mapping itself: a trailing comment/blank line after the
+                // last entry with no specific entry of its own to attach to.
+                render_trivia(&node.trivia, indent, out);
             }
             NodeKind::Sequence(items) => {
                 if items.is_empty() {
@@ -304,6 +321,9 @@ impl EditableDocument {
                 }
                 for item in items {
                     let item_node = self.document.node(*item);
+                    if let Some(item_node) = item_node {
+                        render_trivia(&item_node.trivia, indent, out);
+                    }
                     if item_node.map(is_nonempty_collection).unwrap_or(false) {
                         out.push_str(&prefix);
                         out.push_str("-\n");
@@ -315,6 +335,7 @@ impl EditableDocument {
                         out.push('\n');
                     }
                 }
+                render_trivia(&node.trivia, indent, out);
             }
         }
     }
@@ -403,6 +424,72 @@ mod tests {
             NodeKind::Sequence(seq) => assert_eq!(seq.len(), 3),
             other => panic!("expected sequence, got {other:?}"),
         }
+    }
+
+    /// Regression test for the previously-documented comment-preservation gap: a comment
+    /// attached to one mapping entry must survive `render()` even when editing a *different*
+    /// entry marks the whole mapping dirty (which previously caused the container to be
+    /// reconstructed via the pretty-printer, silently dropping every entry's trivia rather than
+    /// only the container's own).
+    #[test]
+    fn dirty_mapping_preserves_an_untouched_entrys_comment() {
+        let source = "a: 1\n# comment on b\nb: 2\nc: 3\n";
+        let mut doc = EditableDocument::parse(source).unwrap();
+        doc.set(&Path::root().field("c"), EditValue::Scalar(ScalarValue::Int(99))).unwrap();
+        let rendered = doc.render();
+
+        assert!(
+            rendered.contains("# comment on b"),
+            "comment on untouched entry `b` was dropped: {rendered:?}"
+        );
+        assert!(rendered.contains("b: 2"), "untouched entry `b` itself was dropped: {rendered:?}");
+
+        let reparsed = tpt_yaml_core::parse(&rendered).unwrap();
+        let root = reparsed.root().unwrap();
+        let c = resolve_path(&reparsed, root, &Path::root().field("c")).unwrap();
+        match &reparsed.node(c).unwrap().kind {
+            NodeKind::Scalar(s) => assert_eq!(s.value, ScalarValue::Int(99)),
+            other => panic!("expected scalar, got {other:?}"),
+        }
+    }
+
+    /// Same regression, for a sequence: a comment attached to one item must survive `render()`
+    /// when another edit (a `push`) marks the whole sequence dirty.
+    #[test]
+    fn dirty_sequence_preserves_an_untouched_items_comment() {
+        let source = "items:\n  - 1\n  # comment on second item\n  - 2\n  - 3\n";
+        let mut doc = EditableDocument::parse(source).unwrap();
+        doc.push(&Path::root().field("items"), EditValue::Scalar(ScalarValue::Int(4))).unwrap();
+        let rendered = doc.render();
+
+        assert!(
+            rendered.contains("# comment on second item"),
+            "comment on untouched sequence item was dropped: {rendered:?}"
+        );
+
+        let reparsed = tpt_yaml_core::parse(&rendered).unwrap();
+        let root = reparsed.root().unwrap();
+        let items = resolve_path(&reparsed, root, &Path::root().field("items")).unwrap();
+        match &reparsed.node(items).unwrap().kind {
+            NodeKind::Sequence(seq) => assert_eq!(seq.len(), 4),
+            other => panic!("expected sequence, got {other:?}"),
+        }
+    }
+
+    /// A comment trailing the *last* entry of a mapping (with no specific entry of its own to
+    /// attach to) is attached to the container node itself by `tpt_yaml_core`'s parser; it must
+    /// still survive when the container is reconstructed dirty.
+    #[test]
+    fn dirty_mapping_preserves_its_own_trailing_comment() {
+        let source = "a: 1\nb: 2\n# trailing comment\n";
+        let mut doc = EditableDocument::parse(source).unwrap();
+        doc.set(&Path::root().field("a"), EditValue::Scalar(ScalarValue::Int(9))).unwrap();
+        let rendered = doc.render();
+
+        assert!(
+            rendered.contains("# trailing comment"),
+            "container's own trailing comment was dropped: {rendered:?}"
+        );
     }
 
     #[test]

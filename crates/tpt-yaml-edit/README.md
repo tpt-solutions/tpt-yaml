@@ -36,13 +36,26 @@ assert!(rendered.contains("a: 1\n"));
 An edit doesn't mutate a node in place; it splices a fresh node (no source span) into the parent
 and marks every ancestor "dirty". `render()` walks the tree: a node with a source span that isn't
 dirty is blitted verbatim from the original source; a dirty node is reconstructed by recursing
-into its children with the same rule. The one trade-off: a container that becomes dirty loses its
-directly-attached trivia (core's trivia model is per-container, not per-entry), so comments
-immediately around edited entries aren't re-inserted. Nested clean subtrees are unaffected.
+into its children with the same rule. Each node in `tpt_yaml_core`'s arena already carries its own
+leading trivia (the comment/blank-line run immediately before it in source order — see
+`tpt_yaml_core::node::NodeData::trivia`); when a container becomes dirty and has to be
+reconstructed rather than blitted, `render()` re-emits every untouched child's own trivia (and the
+container's own trailing trivia — a comment after the last entry with no specific entry to attach
+to) as it walks the entries, so comments around edited siblings survive. Nested clean subtrees are
+unaffected either way.
 
 ## Known limitations
 
-- Comments directly attached to a dirty container aren't preserved (see above); comments around
-  untouched siblings are.
+- A comment attached to an entry that is itself edited/removed is dropped along with that entry —
+  expected, since the entry's own node (and its trivia) no longer exists in the new tree.
+- `tpt_yaml_core`'s trivia attachment has a couple of pre-existing quirks inherited here rather
+  than fixed: a trailing same-line comment after a mapping's *last* entry (`b: 2 # trailing`, at
+  end of block) is attached to the entry's *value* node, not necessarily where you'd naively
+  expect it back if that entry is later edited; and a comment before the very first entry of a
+  *nested* container can end up attached to a node one level down (inside that container) rather
+  than to the container itself, which matters only if that inner node's line is specifically
+  edited while its container stays otherwise untouched. Both are positional edge cases in
+  `tpt_yaml_core::parser`'s trivia-to-node attribution, not data loss — the comment still survives
+  `render()`, just not always re-anchored to the exact original line.
 - Edits to aliases and anchors on synthesized subtrees are not yet expressible (`EditValue` has
   no alias/anchor spelling); existing aliases in untouched regions blit verbatim.

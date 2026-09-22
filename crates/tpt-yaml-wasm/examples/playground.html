@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<!--
+  tpt-yaml interactive playground — edit YAML and see the result live.
+
+  Build the WASM package first:
+      wasm-pack build --target web crates/tpt-yaml-wasm
+
+  Then serve this directory with any static HTTP server (file:// won't work
+  because wasm loading requires http/https):
+      cd crates/tpt-yaml-wasm
+      python -m http.server 8000
+      # open http://localhost:8000/examples/playground.html
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>tpt-yaml Playground</title>
+  <style>
+    :root {
+      --bg:        #1e1e2e;
+      --surface:   #2a2a3e;
+      --border:    #44445a;
+      --text:      #cdd6f4;
+      --muted:     #7f849c;
+      --accent:    #89b4fa;
+      --ok:        #a6e3a1;
+      --err:       #f38ba8;
+      --warn:      #fab387;
+      --mono:      "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
+      --radius:    6px;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, sans-serif;
+      font-size: 14px;
+      display: flex;
+      flex-direction: column;
+      min-height: 100vh;
+    }
+
+    /* ---- header ---- */
+    header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 20px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+    }
+    header h1 { font-size: 16px; font-weight: 600; color: var(--accent); }
+    header .badge {
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 20px;
+      background: var(--border);
+      color: var(--muted);
+    }
+    header .spacer { flex: 1; }
+    header .sample-label { color: var(--muted); font-size: 12px; }
+    header select {
+      background: var(--surface);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 4px 8px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+
+    /* ---- toolbar ---- */
+    .toolbar {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      padding: 8px 20px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+    }
+    .toolbar button {
+      background: var(--accent);
+      color: #1e1e2e;
+      border: none;
+      border-radius: var(--radius);
+      padding: 5px 14px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+    .toolbar button:hover { opacity: 0.85; }
+    .toolbar button.secondary {
+      background: var(--border);
+      color: var(--text);
+      font-weight: 400;
+    }
+    .toolbar .mode-label {
+      font-size: 12px;
+      color: var(--muted);
+      margin-left: 8px;
+    }
+    #status {
+      margin-left: auto;
+      font-size: 12px;
+      font-family: var(--mono);
+      padding: 3px 10px;
+      border-radius: 20px;
+    }
+    #status.ok   { background: #2d4738; color: var(--ok); }
+    #status.err  { background: #4a2030; color: var(--err); }
+    #status.idle { background: var(--border); color: var(--muted); }
+
+    /* ---- main panels ---- */
+    main {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0;
+    }
+
+    .panel {
+      display: flex;
+      flex-direction: column;
+      border-right: 1px solid var(--border);
+    }
+    .panel:last-child { border-right: none; }
+
+    .panel-header {
+      padding: 8px 16px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    textarea, #output {
+      flex: 1;
+      font-family: var(--mono);
+      font-size: 13px;
+      line-height: 1.6;
+      padding: 16px;
+      background: var(--bg);
+      color: var(--text);
+      border: none;
+      resize: none;
+      outline: none;
+      white-space: pre;
+      overflow: auto;
+    }
+    textarea::placeholder { color: var(--muted); }
+
+    #output { tab-size: 2; }
+    #output.error { color: var(--err); }
+
+    /* ---- footer ---- */
+    footer {
+      padding: 6px 20px;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      font-size: 11px;
+      color: var(--muted);
+      display: flex;
+      gap: 16px;
+    }
+    footer a { color: var(--accent); text-decoration: none; }
+    footer a:hover { text-decoration: underline; }
+
+    @media (max-width: 700px) {
+      main { grid-template-columns: 1fr; }
+      .panel { border-right: none; border-bottom: 1px solid var(--border); }
+      textarea, #output { min-height: 220px; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>tpt-yaml Playground</h1>
+  <span class="badge">WASM</span>
+  <span class="spacer"></span>
+  <span class="sample-label">Sample:</span>
+  <select id="sample-picker">
+    <option value="basic">Basic mapping</option>
+    <option value="nested">Nested structure</option>
+    <option value="anchors">Anchors &amp; aliases</option>
+    <option value="sequence">Sequence of records</option>
+    <option value="multiline">Block scalars</option>
+  </select>
+</header>
+
+<div class="toolbar">
+  <button id="btn-convert">YAML → JSON</button>
+  <button class="secondary" id="btn-prettify">Prettify YAML</button>
+  <button class="secondary" id="btn-reverse">JSON → YAML</button>
+  <span class="mode-label">Edit in the left pane, see results on the right</span>
+  <span id="status" class="idle">ready</span>
+</div>
+
+<main>
+  <div class="panel">
+    <div class="panel-header">YAML Input</div>
+    <textarea id="input" spellcheck="false" placeholder="Paste or type YAML here…"></textarea>
+  </div>
+  <div class="panel">
+    <div class="panel-header">Output</div>
+    <pre id="output"></pre>
+  </div>
+</main>
+
+<footer>
+  <span>
+    Powered by
+    <a href="https://github.com/tpt-solutions/tpt-yaml" target="_blank">tpt-yaml</a>
+    compiled to WebAssembly via wasm-bindgen
+  </span>
+  <span>
+    Build: <code>wasm-pack build --target web crates/tpt-yaml-wasm</code>
+  </span>
+</footer>
+
+<script type="module">
+  import init, { parse, toJson, stringify } from "../pkg/tpt_yaml_wasm.js";
+
+  // ---------------------------------------------------------------------------
+  // Sample documents
+  // ---------------------------------------------------------------------------
+  const SAMPLES = {
+    basic: `# A simple server configuration
+server:
+  host: localhost
+  port: 8080
+  tls: true
+database:
+  url: postgres://db/myapp
+  pool_size: 10
+`,
+    nested: `project:
+  name: tpt-yaml
+  version: "0.1.0"
+  authors:
+    - name: Alice
+      role: lead
+    - name: Bob
+      role: contributor
+  features:
+    - streaming
+    - schema-validation
+    - lossless-editing
+`,
+    anchors: `# Anchors and aliases share subtrees
+defaults: &defaults
+  timeout: 30
+  retries: 3
+
+production:
+  <<: *defaults
+  timeout: 60
+  host: prod.example.com
+
+staging:
+  <<: *defaults
+  host: staging.example.com
+`,
+    sequence: `- id: 1
+  name: Alice
+  active: true
+  score: 98.5
+- id: 2
+  name: Bob
+  active: false
+  score: 72.0
+- id: 3
+  name: Carol
+  active: true
+  score: 85.3
+`,
+    multiline: `description: |
+  This is a literal block scalar.
+  Line breaks are preserved exactly.
+  Great for embedded scripts or markdown.
+
+summary: >
+  This is a folded block scalar.
+  Long lines are joined with spaces,
+  making it good for prose.
+
+inline: "A double-quoted scalar with a \n embedded newline"
+`,
+  };
+
+  // ---------------------------------------------------------------------------
+  // State
+  // ---------------------------------------------------------------------------
+  const input   = document.getElementById("input");
+  const output  = document.getElementById("output");
+  const status  = document.getElementById("status");
+
+  function setStatus(text, kind) {
+    status.textContent = text;
+    status.className = kind; // "ok" | "err" | "idle"
+  }
+
+  function showError(msg) {
+    output.className = "error";
+    output.textContent = "Error: " + msg;
+    setStatus("error", "err");
+  }
+
+  function showResult(text) {
+    output.className = "";
+    output.textContent = text;
+    setStatus("ok", "ok");
+  }
+
+  // ---------------------------------------------------------------------------
+  // Actions
+  // ---------------------------------------------------------------------------
+  function doConvert() {
+    const src = input.value.trim();
+    if (!src) { output.textContent = ""; setStatus("ready", "idle"); return; }
+    try {
+      const json = toJson(src);
+      const pretty = JSON.stringify(JSON.parse(json), null, 2);
+      showResult(pretty);
+    } catch (err) {
+      showError(err.message);
+    }
+  }
+
+  function doPrettify() {
+    const src = input.value.trim();
+    if (!src) return;
+    try {
+      const val = parse(src);
+      const prettied = stringify(val);
+      input.value = prettied;
+      showResult("(YAML prettified in-place)");
+      setStatus("formatted", "ok");
+    } catch (err) {
+      showError(err.message);
+    }
+  }
+
+  function doReverse() {
+    const src = output.textContent.trim();
+    if (!src || output.classList.contains("error")) return;
+    try {
+      // Try to parse the output panel as JSON, then convert back to YAML
+      const obj = JSON.parse(src);
+      const yaml = stringify(obj);
+      input.value = yaml;
+      output.textContent = "(round-tripped JSON → YAML into left pane)";
+      output.className = "";
+      setStatus("round-tripped", "ok");
+    } catch (err) {
+      showError("Output is not valid JSON: " + err.message);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Live conversion (debounced)
+  // ---------------------------------------------------------------------------
+  let debounceTimer = null;
+  input.addEventListener("input", () => {
+    clearTimeout(debounceTimer);
+    setStatus("…", "idle");
+    debounceTimer = setTimeout(doConvert, 300);
+  });
+
+  document.getElementById("btn-convert").addEventListener("click", doConvert);
+  document.getElementById("btn-prettify").addEventListener("click", doPrettify);
+  document.getElementById("btn-reverse").addEventListener("click", doReverse);
+
+  // ---------------------------------------------------------------------------
+  // Sample picker
+  // ---------------------------------------------------------------------------
+  document.getElementById("sample-picker").addEventListener("change", (e) => {
+    const key = e.target.value;
+    if (SAMPLES[key]) {
+      input.value = SAMPLES[key];
+      doConvert();
+    }
+  });
+
+  // ---------------------------------------------------------------------------
+  // Boot
+  // ---------------------------------------------------------------------------
+  async function main() {
+    setStatus("loading wasm…", "idle");
+    try {
+      await init();
+      setStatus("ready", "idle");
+      // Load the default sample
+      input.value = SAMPLES.basic;
+      doConvert();
+    } catch (err) {
+      showError("Failed to load WASM module: " + err.message +
+        "\n\nDid you run `wasm-pack build --target web crates/tpt-yaml-wasm`?" +
+        "\nAnd serve via HTTP (not file://)?"
+      );
+    }
+  }
+
+  main();
+</script>
+</body>
+</html>
